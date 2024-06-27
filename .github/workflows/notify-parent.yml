@@ -1,0 +1,22 @@
+name: Notify Parent Repository
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  notify-parent:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout submodule repository
+      uses: actions/checkout@v2
+
+    - name: Trigger workflow in parent repository
+      run: |
+        curl -X POST \
+             -H "Authorization: token ${{ secrets.RUNNER_TOKEN }}" \
+             -H "Accept: application/vnd.github.v3+json" \
+             https://api.github.com/repos/SWAMP-Blimps/CatchingBlimp/actions/workflows/update-submodules.yml/dispatches \
+             -d '{"ref": "main"}'
