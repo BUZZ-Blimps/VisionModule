@@ -18,5 +18,5 @@ jobs:
         curl -X POST \
              -H "Authorization: token ${{ secrets.RUNNER_TOKEN }}" \
              -H "Accept: application/vnd.github.v3+json" \
-             https://api.github.com/repos/SWAMP-Blimps/CatchingBlimp/actions/workflows/update-submodules.yml/dispatches \
+             https://api.github.com/repos/BUZZ-Blimps/CatchingBlimp/actions/workflows/update-submodules.yml/dispatches \
              -d '{"ref": "main"}'
