@@ -1,0 +1,29 @@
+# ROS 2 build and install directories
+build/
+install/
+log/
+
+# Colcon-related files
+.colcon_cd_root
+.colcon/
+
+# Python-related files
+__pycache__/
+*.py[cod]
+
+# C++ build artifacts
+*.o
+*.so
+*.a
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# Temporary files
+*.swp
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
