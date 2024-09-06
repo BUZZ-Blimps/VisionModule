@@ -13,6 +13,9 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <iostream>
 #include <yaml-cpp/yaml.h>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 class StereoCameraNode : public rclcpp::Node
 {
@@ -92,14 +95,14 @@ public:
         stereo_ = cv::StereoBM::create();
         updateDisparityMapParams();
 
-        // Create publishers
+        // Create publishers with a larger queue size
         if (publish_intermediate_) {
-            pub_left_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_raw", 10);
-            pub_right_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_raw", 10);
-            pub_left_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_rect", 10);
-            pub_right_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_rect", 10);
+            pub_left_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_raw", 1);
+            pub_right_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_raw", 1);
+            pub_left_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_rect", 1);
+            pub_right_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_rect", 1);
         }
-        pub_disparity_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(node_namespace_ + "/disparity", 10);
+        pub_disparity_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(node_namespace_ + "/disparity", 1);
 
         // Create performance measurement publishers
         pub_split_time_ = this->create_publisher<std_msgs::msg::Float64>("performance/split_time", 10);
@@ -110,19 +113,28 @@ public:
         pub_total_sum_time_ = this->create_publisher<std_msgs::msg::Float64>("performance/total_sum_time", 10);
         pub_fps_ = this->create_publisher<std_msgs::msg::Float64>("performance/fps", 10);
 
-        // Create timer for main loop
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(33), std::bind(&StereoCameraNode::timerCallback, this));
+        // Create timer for main loop with reduced frequency
+        timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&StereoCameraNode::timerCallback, this));
 
         // Create timer for updating disparity map parameters
         param_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&StereoCameraNode::updateDisparityMapParams, this));
+
+        // Initialize the processing thread
+        processing_thread_ = std::thread(&StereoCameraNode::processingLoop, this);
+    }
+
+    ~StereoCameraNode()
+    {
+        stop_processing_ = true;
+        if (processing_thread_.joinable()) {
+            processing_thread_.join();
+        }
     }
 
 private:
     void timerCallback()
     {
-        auto start_time = std::chrono::high_resolution_clock::now();
-
-        cv::Mat frame, left_raw, right_raw;
+        cv::Mat frame;
         cap_ >> frame;
 
         if (frame.empty()) {
@@ -130,74 +142,103 @@ private:
             return;
         }
 
-        // Split frame into left and right images
-        auto split_start = std::chrono::high_resolution_clock::now();
-        left_raw = frame(cv::Rect(0, 0, frame.cols/2, frame.rows));
-        right_raw = frame(cv::Rect(frame.cols/2, 0, frame.cols/2, frame.rows));
-        auto split_end = std::chrono::high_resolution_clock::now();
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        latest_frame_ = frame;
+    }
 
-        // Debayer and convert to grayscale
-        auto debay_start = std::chrono::high_resolution_clock::now();
-        cv::Mat left_gray, right_gray;
+    void processingLoop()
+    {
+        while (rclcpp::ok() && !stop_processing_) {
+            cv::Mat frame;
+            {
+                std::lock_guard<std::mutex> lock(frame_mutex_);
+                if (!latest_frame_.empty()) {
+                    frame = latest_frame_.clone();
+                    latest_frame_ = cv::Mat();
+                }
+            }
 
-        if (left_raw.type() == CV_8UC1) {
-            cv::cvtColor(left_raw, left_gray, cv::COLOR_BayerBG2GRAY);
-        } else if (left_raw.type() == CV_8UC3) {
-            cv::cvtColor(left_raw, left_gray, cv::COLOR_BGR2GRAY);
-        } else {
-            left_gray = left_raw.clone();
+            if (frame.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
+            auto start_time = std::chrono::high_resolution_clock::now();
+
+            // Split frame into left and right images
+            auto split_start = std::chrono::high_resolution_clock::now();
+            cv::Mat left_raw = frame(cv::Rect(0, 0, frame.cols/2, frame.rows));
+            cv::Mat right_raw = frame(cv::Rect(frame.cols/2, 0, frame.cols/2, frame.rows));
+            auto split_end = std::chrono::high_resolution_clock::now();
+
+            // Debayer and convert to grayscale
+            auto debay_start = std::chrono::high_resolution_clock::now();
+            cv::Mat left_gray, right_gray;
+
+            if (left_raw.type() == CV_8UC1) {
+                cv::cvtColor(left_raw, left_gray, cv::COLOR_BayerBG2GRAY);
+            } else if (left_raw.type() == CV_8UC3) {
+                cv::cvtColor(left_raw, left_gray, cv::COLOR_BGR2GRAY);
+            } else {
+                left_gray = left_raw.clone();
+            }
+
+            if (right_raw.type() == CV_8UC1) {
+                cv::cvtColor(right_raw, right_gray, cv::COLOR_BayerBG2GRAY);
+            } else if (right_raw.type() == CV_8UC3) {
+                cv::cvtColor(right_raw, right_gray, cv::COLOR_BGR2GRAY);
+            } else {
+                right_gray = right_raw.clone();
+            }
+
+            auto debay_end = std::chrono::high_resolution_clock::now();
+
+            // Rectify
+            auto rectify_start = std::chrono::high_resolution_clock::now();
+            cv::Mat left_rect, right_rect;
+            cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
+            cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
+            auto rectify_end = std::chrono::high_resolution_clock::now();
+
+            // Compute disparity
+            auto disparity_start = std::chrono::high_resolution_clock::now();
+            cv::Mat disparity;
+            stereo_->compute(left_rect, right_rect, disparity);
+            auto disparity_end = std::chrono::high_resolution_clock::now();
+
+            auto end_time = std::chrono::high_resolution_clock::now();
+
+            // Publish images with rate limiting
+            static auto last_publish_time = std::chrono::steady_clock::now();
+            auto current_time = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_publish_time).count() >= 100) {
+                if (publish_intermediate_) {
+                    publishImage(left_raw, pub_left_raw_, sensor_msgs::image_encodings::MONO8);
+                    publishImage(right_raw, pub_right_raw_, sensor_msgs::image_encodings::MONO8);
+                    publishImage(left_rect, pub_left_rect_, sensor_msgs::image_encodings::MONO8);
+                    publishImage(right_rect, pub_right_rect_, sensor_msgs::image_encodings::MONO8);
+                }
+                publishDisparityImage(disparity);
+                last_publish_time = current_time;
+            }
+
+            // Publish performance measurements
+            publishDuration(split_start, split_end, pub_split_time_);
+            publishDuration(debay_start, debay_end, pub_debay_time_);
+            publishDuration(rectify_start, rectify_end, pub_rectify_time_);
+            publishDuration(disparity_start, disparity_end, pub_disparity_time_);
+            publishDuration(start_time, end_time, pub_total_time_);
+
+            auto total_sum = std::chrono::duration_cast<std::chrono::microseconds>(split_end - split_start).count() +
+                             std::chrono::duration_cast<std::chrono::microseconds>(debay_end - debay_start).count() +
+                             std::chrono::duration_cast<std::chrono::microseconds>(rectify_end - rectify_start).count() +
+                             std::chrono::duration_cast<std::chrono::microseconds>(disparity_end - disparity_start).count();
+
+            publishValue(static_cast<double>(total_sum) / 1000.0, pub_total_sum_time_);
+
+            double fps = 1.0 / (std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count() / 1000000.0);
+            publishValue(fps, pub_fps_);
         }
-
-        if (right_raw.type() == CV_8UC1) {
-            cv::cvtColor(right_raw, right_gray, cv::COLOR_BayerBG2GRAY);
-        } else if (right_raw.type() == CV_8UC3) {
-            cv::cvtColor(right_raw, right_gray, cv::COLOR_BGR2GRAY);
-        } else {
-            right_gray = right_raw.clone();
-        }
-
-        auto debay_end = std::chrono::high_resolution_clock::now();
-
-        // Rectify
-        auto rectify_start = std::chrono::high_resolution_clock::now();
-        cv::Mat left_rect, right_rect;
-        cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
-        cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
-        auto rectify_end = std::chrono::high_resolution_clock::now();
-
-        // Compute disparity
-        auto disparity_start = std::chrono::high_resolution_clock::now();
-        cv::Mat disparity;
-        stereo_->compute(left_rect, right_rect, disparity);
-        auto disparity_end = std::chrono::high_resolution_clock::now();
-
-        auto end_time = std::chrono::high_resolution_clock::now();
-
-        // Publish images
-        if (publish_intermediate_) {
-            publishImage(left_raw, pub_left_raw_, sensor_msgs::image_encodings::MONO8);
-            publishImage(right_raw, pub_right_raw_, sensor_msgs::image_encodings::MONO8);
-            publishImage(left_rect, pub_left_rect_, sensor_msgs::image_encodings::MONO8);
-            publishImage(right_rect, pub_right_rect_, sensor_msgs::image_encodings::MONO8);
-        }
-        publishDisparityImage(disparity);
-
-        // Publish performance measurements
-        publishDuration(split_start, split_end, pub_split_time_);
-        publishDuration(debay_start, debay_end, pub_debay_time_);
-        publishDuration(rectify_start, rectify_end, pub_rectify_time_);
-        publishDuration(disparity_start, disparity_end, pub_disparity_time_);
-        publishDuration(start_time, end_time, pub_total_time_);
-
-        auto total_sum = std::chrono::duration_cast<std::chrono::microseconds>(split_end - split_start).count() +
-                         std::chrono::duration_cast<std::chrono::microseconds>(debay_end - debay_start).count() +
-                         std::chrono::duration_cast<std::chrono::microseconds>(rectify_end - rectify_start).count() +
-                         std::chrono::duration_cast<std::chrono::microseconds>(disparity_end - disparity_start).count();
-
-        publishValue(static_cast<double>(total_sum) / 1000.0, pub_total_sum_time_);
-
-        double fps = 1.0 / (std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count() / 1000000.0);
-        publishValue(fps, pub_fps_);
     }
 
     void updateDisparityMapParams()
@@ -297,7 +338,6 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_raw_, pub_right_raw_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_rect_, pub_right_rect_;
     rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr pub_disparity_;
-
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_split_time_, pub_debay_time_, pub_rectify_time_, pub_disparity_time_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_total_time_, pub_total_sum_time_, pub_fps_;
 
@@ -308,6 +348,11 @@ private:
     bool publish_intermediate_;
     std::string node_namespace_;
     int camera_number_;
+
+    std::thread processing_thread_;
+    std::mutex frame_mutex_;
+    cv::Mat latest_frame_;
+    std::atomic<bool> stop_processing_{false};
 };
 
 int main(int argc, char** argv)
