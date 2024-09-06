@@ -13,9 +13,20 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(Threads REQUIRED)
+find_package(stereo_vision_msgs REQUIRED)
+include_directories(${stereo_vision_msgs_INCLUDE_DIRS})
+include_directories(${CMAKE_INSTALL_PREFIX}/include/stereo_vision_msgs)
 
 add_executable(stereo_vision src/stereo_vision.cpp)
-ament_target_dependencies(stereo_vision rclcpp sensor_msgs stereo_msgs cv_bridge OpenCV)
+ament_target_dependencies(stereo_vision
+  rclcpp
+  sensor_msgs
+  stereo_msgs
+  cv_bridge
+  OpenCV
+  stereo_vision_msgs
+)
 
 target_link_libraries(stereo_vision
   ${rclcpp_LIBRARIES}
@@ -24,6 +35,9 @@ target_link_libraries(stereo_vision
   ${OpenCV_LIBRARIES}
   ${ament_index_cpp_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
+  ${Threads_LIBRARIES}
+  ${stereo_msgs_LIBRARIES}
+  ${stereo_vision_msgs_LIBRARIES}
 )
 
 install(TARGETS
