@@ -1,44 +1,6 @@
 # VisionModule
 This repository houses the code that will directly enables computer vision for the CatchingBlimp system
 
-Certainly! I'll provide you with a `.gitignore` file for ROS 2 colcon package build files and documentation on how to run and use the stereo vision code.
-
-First, let's create a `.gitignore` file:
-
-```
-# ROS 2 build and install directories
-build/
-install/
-log/
-
-# Colcon-related files
-.colcon_cd_root
-.colcon/
-
-# Python-related files
-__pycache__/
-*.py[cod]
-
-# C++ build artifacts
-*.o
-*.so
-*.a
-
-# IDE-specific files
-.vscode/
-.idea/
-
-# Temporary files
-*.swp
-*~
-
-# OS-specific files
-.DS_Store
-Thumbs.db
-```
-
-Now, let's provide documentation on how to run and use the stereo vision code:
-
 # Stereo Vision ROS 2 Package
 
 This package provides stereo vision functionality using ROS 2 and OpenCV.
