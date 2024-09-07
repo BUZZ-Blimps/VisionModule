@@ -42,9 +42,6 @@ if(IS_RK3588)
   set(RKNPU2_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2)
   set(RGA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/runtime/RGA)
 
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(RKNN REQUIRED rknn_api)
-
   include_directories(
     ${RKNPU2_DIR}/runtime/RK3588/Linux/librknn_api/include
     ${RGA_DIR}/include
@@ -66,8 +63,11 @@ endif()
 include_directories(${stereo_vision_msgs_INCLUDE_DIRS})
 include_directories(${CMAKE_INSTALL_PREFIX}/include/stereo_vision_msgs)
 include_directories(include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/examples/rknn_yolov5_demo/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/3rdparty/rga/include)
 
 add_executable(stereo_vision src/stereo_vision.cpp)
+
 ament_target_dependencies(stereo_vision
   rclcpp
   sensor_msgs
@@ -77,6 +77,7 @@ ament_target_dependencies(stereo_vision
   stereo_vision_msgs
 )
 
+# Link the postprocess library to the main executable
 target_link_libraries(stereo_vision
   ${rclcpp_LIBRARIES}
   ${sensor_msgs_LIBRARIES}
@@ -90,10 +91,13 @@ target_link_libraries(stereo_vision
 )
 
 if(IS_RK3588)
+  add_library(postprocess STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/examples/rknn_yolov5_demo/src/postprocess.cc
+  )
   target_link_libraries(stereo_vision
-    rknn_api
-    rga
-    ${RKNN_LIBRARIES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/runtime/Linux/librknn_api/librknnrt.so
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/3rdparty/rga/librga.so
+    postprocess
   )
 endif()
 

@@ -28,7 +28,7 @@
 
 #define OBJ_NAME_MAX_SIZE 16
 #define OBJ_NUMB_MAX_SIZE 64
-#define OBJ_CLASS_NUM 80
+#define OBJ_CLASS_NUM 3
 #define NMS_THRESH 0.45
 #define BOX_THRESH 0.25
 #define LABEL_NUMB_MAX_SIZE 80
@@ -353,7 +353,7 @@ private:
     #ifdef ENABLE_RKNN
     bool initRKNN()
     {
-        int ret = rknn_init(&rknn_ctx_, rknn_model_path_.c_str(), 0, 0, NULL);
+        int ret = rknn_init(&rknn_ctx_, const_cast<void*>(static_cast<const void*>(rknn_model_path_.c_str())), 0, 0, NULL);
         if (ret < 0) {
             RCLCPP_ERROR(this->get_logger(), "rknn_init fail! ret=%d", ret);
             return false;
@@ -414,7 +414,7 @@ private:
         inputs[0].fmt = RKNN_TENSOR_NHWC;
         inputs[0].buf = resized_image.data;
 
-        rknn_input_set(rknn_ctx_, 1, inputs);
+        rknn_inputs_set(rknn_ctx_, 1, inputs);
 
         // Run inference
         rknn_output outputs[io_num_.n_output];
@@ -438,9 +438,13 @@ private:
             out_zps.push_back(output_attrs_[i].zp);
         }
 
-        post_process((int8_t *)outputs[0].buf, (int8_t *)outputs[1].buf, (int8_t *)outputs[2].buf, 
-                     model_height_, model_width_, BOX_THRESH, NMS_THRESH, 
-                     scale_w_, scale_h_, out_zps, out_scales, &detect_result_group);
+        float conf_threshold = BOX_THRESH;
+        float nms_threshold = NMS_THRESH;
+        BOX_RECT scale_w_rect = {0, 0, static_cast<int>(scale_w_), 0};
+        ret = post_process((int8_t*)outputs[0].buf, (int8_t*)outputs[1].buf, (int8_t*)outputs[2].buf, 
+                               model_height_, model_width_, 
+                               conf_threshold, nms_threshold,
+                               scale_w_rect, scale_w_, scale_h_, out_zps, out_scales, &detect_result_group);
 
         // Convert detect_result_group to detections
         for (int i = 0; i < detect_result_group.count; i++)

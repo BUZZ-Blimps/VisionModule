@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "postprocess.h"
+#include "../include/postprocess.h"
 
 #include <math.h>
 #include <stdint.h>
