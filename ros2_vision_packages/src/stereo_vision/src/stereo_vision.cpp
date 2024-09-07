@@ -17,6 +17,26 @@
 #include <mutex>
 #include <atomic>
 #include "stereo_vision_msgs/msg/performance_metrics.hpp"
+#include "stereo_vision_msgs/msg/detection.hpp"
+#include "stereo_vision_msgs/msg/detection_array.hpp"
+
+#ifdef ENABLE_RKNN
+#include <rknn_api.h>
+#include "postprocess.h"
+#include "preprocess.h"
+#include "RgaUtils.h"
+
+#define OBJ_NAME_MAX_SIZE 16
+#define OBJ_NUMB_MAX_SIZE 64
+#define OBJ_CLASS_NUM 80
+#define NMS_THRESH 0.45
+#define BOX_THRESH 0.25
+#define LABEL_NUMB_MAX_SIZE 80
+
+static char* labels[OBJ_CLASS_NUM];
+
+const std::string rknn_model_path_ = ament_index_cpp::get_package_share_directory("stereo_vision") + "/models/yolov5.rknn";
+#endif
 
 class StereoCameraNode : public rclcpp::Node
 {
@@ -66,10 +86,10 @@ public:
         frame_ = cv::Mat(height, width, CV_8UC1);
         left_raw_ = cv::Mat(height, width/2, CV_8UC1);
         right_raw_ = cv::Mat(height, width/2, CV_8UC1);
-        left_debay_ = cv::Mat(height, width/2, CV_8UC1);
-        right_debay_ = cv::Mat(height, width/2, CV_8UC1);
-        left_rect_ = cv::Mat(height, width/2, CV_8UC1);
-        right_rect_ = cv::Mat(height, width/2, CV_8UC1);
+        left_debay_ = cv::Mat(height, width/2, CV_8UC3);
+        right_debay_ = cv::Mat(height, width/2, CV_8UC3);
+        left_rect_ = cv::Mat(height, width/2, CV_8UC3);
+        right_rect_ = cv::Mat(height, width/2, CV_8UC3);
         disparity_ = cv::Mat(height, width/2, CV_16S);
         disparity_float_ = cv::Mat(height, width/2, CV_32F);
 
@@ -125,11 +145,22 @@ public:
         pub_performance_ = this->create_publisher<stereo_vision_msgs::msg::PerformanceMetrics>(
             node_namespace_ + "/performance", 10);
 
+        // Create detections publisher
+        pub_detections_ = this->create_publisher<stereo_vision_msgs::msg::DetectionArray>(node_namespace_ + "/detections", 10);
+
         // Create timer for main loop
         timer_ = this->create_wall_timer(std::chrono::milliseconds(33), std::bind(&StereoCameraNode::timerCallback, this));
 
         // Create timer for updating disparity map parameters
         param_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&StereoCameraNode::updateDisparityMapParams, this));
+
+        #ifdef ENABLE_RKNN
+        // Initialize RKNN
+        if (!initRKNN()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to initialize RKNN");
+            return;
+        }
+        #endif
 
         // Initialize the processing thread
         processing_thread_ = std::thread(&StereoCameraNode::processingLoop, this);
@@ -141,6 +172,9 @@ public:
         if (processing_thread_.joinable()) {
             processing_thread_.join();
         }
+        #ifdef ENABLE_RKNN
+        rknn_destroy(rknn_ctx_);
+        #endif
     }
 
 private:
@@ -179,28 +213,37 @@ private:
             right_raw_ = frame_(cv::Rect(frame_.cols/2, 0, frame_.cols/2, frame_.rows));
             auto split_end = std::chrono::high_resolution_clock::now();
 
-            // Debayer and convert to grayscale
+            // Rectify
+            auto rectify_start = std::chrono::high_resolution_clock::now();
+            cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_LINEAR);
+            cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_LINEAR);
+            auto rectify_end = std::chrono::high_resolution_clock::now();
+
+            // Convert to grayscale for disparity computation
             auto debay_start = std::chrono::high_resolution_clock::now();
             try {
-                cv::cvtColor(left_raw_, left_debay_, cv::COLOR_BGR2GRAY);
-                cv::cvtColor(right_raw_, right_debay_, cv::COLOR_BGR2GRAY);
-
+                cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
+                cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
             } catch (const cv::Exception& e) {
-                RCLCPP_ERROR(this->get_logger(), "OpenCV exception in debayer: %s", e.what());
+                RCLCPP_ERROR(this->get_logger(), "OpenCV exception in grayscale conversion: %s", e.what());
                 continue;
             }
             auto debay_end = std::chrono::high_resolution_clock::now();
 
-            // Rectify
-            auto rectify_start = std::chrono::high_resolution_clock::now();
-            cv::remap(left_debay_, left_rect_, map1_left_, map2_left_, cv::INTER_LINEAR);
-            cv::remap(right_debay_, right_rect_, map1_right_, map2_right_, cv::INTER_LINEAR);
-            auto rectify_end = std::chrono::high_resolution_clock::now();
-
             // Compute disparity
             auto disparity_start = std::chrono::high_resolution_clock::now();
-            stereo_->compute(left_rect_, right_rect_, disparity_);
+            stereo_->compute(left_debay_, right_debay_, disparity_);
             auto disparity_end = std::chrono::high_resolution_clock::now();
+
+            #ifdef ENABLE_RKNN
+            auto yolo_start = std::chrono::high_resolution_clock::now();
+            auto detections = performYOLOInference(left_rect_);
+            auto yolo_end = std::chrono::high_resolution_clock::now();
+            #else
+            auto yolo_start = std::chrono::high_resolution_clock::now();
+            auto yolo_end = yolo_start;
+            std::vector<stereo_vision_msgs::msg::Detection> detections;
+            #endif
 
             auto end_time = std::chrono::high_resolution_clock::now();
 
@@ -211,10 +254,11 @@ private:
                 if (publish_intermediate_) {
                     publishImage(left_raw_, pub_left_raw_, sensor_msgs::image_encodings::MONO8);
                     publishImage(right_raw_, pub_right_raw_, sensor_msgs::image_encodings::MONO8);
-                    publishImage(left_rect_, pub_left_rect_, sensor_msgs::image_encodings::MONO8);
-                    publishImage(right_rect_, pub_right_rect_, sensor_msgs::image_encodings::MONO8);
+                    publishImage(left_rect_, pub_left_rect_, sensor_msgs::image_encodings::BGR8);
+                    publishImage(right_rect_, pub_right_rect_, sensor_msgs::image_encodings::BGR8);
                 }
                 publishDisparityImage(disparity_);
+                publishDetections(detections);
                 last_publish_time = current_time;
             }
 
@@ -224,6 +268,7 @@ private:
                 debay_start, debay_end,
                 rectify_start, rectify_end,
                 disparity_start, disparity_end,
+                yolo_start, yolo_end,
                 start_time, end_time
             );
         }
@@ -273,6 +318,8 @@ private:
         const std::chrono::high_resolution_clock::time_point& rectify_end,
         const std::chrono::high_resolution_clock::time_point& disparity_start,
         const std::chrono::high_resolution_clock::time_point& disparity_end,
+        const std::chrono::high_resolution_clock::time_point& yolo_start,
+        const std::chrono::high_resolution_clock::time_point& yolo_end,
         const std::chrono::high_resolution_clock::time_point& start_time,
         const std::chrono::high_resolution_clock::time_point& end_time)
     {
@@ -282,12 +329,137 @@ private:
         msg.debay_time = std::chrono::duration_cast<std::chrono::microseconds>(debay_end - debay_start).count() / 1000.0;
         msg.rectify_time = std::chrono::duration_cast<std::chrono::microseconds>(rectify_end - rectify_start).count() / 1000.0;
         msg.disparity_time = std::chrono::duration_cast<std::chrono::microseconds>(disparity_end - disparity_start).count() / 1000.0;
+        #ifdef ENABLE_RKNN
+        msg.yolo_time = std::chrono::duration_cast<std::chrono::microseconds>(yolo_end - yolo_start).count() / 1000.0;
+        #else
+        msg.yolo_time = 0.0;
+        #endif
         msg.total_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count() / 1000.0;
 
         msg.fps = 1000.0 / msg.total_time;  // Convert ms to fps
 
         pub_performance_->publish(msg);
     }
+
+    void publishDetections(const std::vector<stereo_vision_msgs::msg::Detection>& detections)
+    {
+        auto msg = stereo_vision_msgs::msg::DetectionArray();
+        msg.header.stamp = this->now();
+        msg.header.frame_id = "stereo_camera";
+        msg.detections = detections;
+        pub_detections_->publish(msg);
+    }
+
+    #ifdef ENABLE_RKNN
+    bool initRKNN()
+    {
+        int ret = rknn_init(&rknn_ctx_, rknn_model_path_.c_str(), 0, 0, NULL);
+        if (ret < 0) {
+            RCLCPP_ERROR(this->get_logger(), "rknn_init fail! ret=%d", ret);
+            return false;
+        }
+
+        ret = rknn_query(rknn_ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num_, sizeof(io_num_));
+        if (ret < 0) {
+            RCLCPP_ERROR(this->get_logger(), "rknn_query fail! ret=%d", ret);
+            return false;
+        }
+
+        rknn_tensor_attr input_attrs[io_num_.n_input];
+        memset(input_attrs, 0, sizeof(input_attrs));
+        for (int i = 0; i < io_num_.n_input; i++) {
+            input_attrs[i].index = i;
+            ret = rknn_query(rknn_ctx_, RKNN_QUERY_INPUT_ATTR, &(input_attrs[i]), sizeof(rknn_tensor_attr));
+            if (ret < 0) {
+                RCLCPP_ERROR(this->get_logger(), "rknn_query fail! ret=%d", ret);
+                return false;
+            }
+        }
+
+        output_attrs_.resize(io_num_.n_output);
+        memset(output_attrs_.data(), 0, sizeof(rknn_tensor_attr) * io_num_.n_output);
+        for (int i = 0; i < io_num_.n_output; i++) {
+            output_attrs_[i].index = i;
+            ret = rknn_query(rknn_ctx_, RKNN_QUERY_OUTPUT_ATTR, &(output_attrs_[i]), sizeof(rknn_tensor_attr));
+            if (ret < 0) {
+                RCLCPP_ERROR(this->get_logger(), "rknn_query fail! ret=%d", ret);
+                return false;
+            }
+        }
+
+        model_width_ = input_attrs[0].dims[2];
+        model_height_ = input_attrs[0].dims[1];
+
+        scale_w_ = (float)model_width_ / image_size_.width;
+        scale_h_ = (float)model_height_ / image_size_.height;
+
+        return true;
+    }
+
+    std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::Mat& image)
+    {
+        std::vector<stereo_vision_msgs::msg::Detection> detections;
+
+        // Preprocess image
+        cv::Mat resized_image;
+        cv::resize(image, resized_image, cv::Size(model_width_, model_height_));
+        cv::cvtColor(resized_image, resized_image, cv::COLOR_BGR2RGB);
+
+        // Set input
+        rknn_input inputs[1];
+        memset(inputs, 0, sizeof(inputs));
+        inputs[0].index = 0;
+        inputs[0].type = RKNN_TENSOR_UINT8;
+        inputs[0].size = model_width_ * model_height_ * 3;
+        inputs[0].fmt = RKNN_TENSOR_NHWC;
+        inputs[0].buf = resized_image.data;
+
+        rknn_input_set(rknn_ctx_, 1, inputs);
+
+        // Run inference
+        rknn_output outputs[io_num_.n_output];
+        memset(outputs, 0, sizeof(outputs));
+        for (int i = 0; i < io_num_.n_output; i++)
+        {
+            outputs[i].index = i;
+            outputs[i].want_float = 0;
+        }
+
+        int ret = rknn_run(rknn_ctx_, NULL);
+        ret = rknn_outputs_get(rknn_ctx_, io_num_.n_output, outputs, NULL);
+
+        // Post-process
+        detect_result_group_t detect_result_group;
+        std::vector<float> out_scales;
+        std::vector<int32_t> out_zps;
+        for (int i = 0; i < io_num_.n_output; ++i)
+        {
+            out_scales.push_back(output_attrs_[i].scale);
+            out_zps.push_back(output_attrs_[i].zp);
+        }
+
+        post_process((int8_t *)outputs[0].buf, (int8_t *)outputs[1].buf, (int8_t *)outputs[2].buf, 
+                     model_height_, model_width_, BOX_THRESH, NMS_THRESH, 
+                     scale_w_, scale_h_, out_zps, out_scales, &detect_result_group);
+
+        // Convert detect_result_group to detections
+        for (int i = 0; i < detect_result_group.count; i++)
+        {
+            stereo_vision_msgs::msg::Detection det;
+            det.label = std::string(detect_result_group.results[i].name);
+            det.confidence = detect_result_group.results[i].prop;
+            det.bbox = {detect_result_group.results[i].box.left, 
+                         detect_result_group.results[i].box.top,
+                         detect_result_group.results[i].box.right - detect_result_group.results[i].box.left,
+                         detect_result_group.results[i].box.bottom - detect_result_group.results[i].box.top};
+            detections.push_back(det);
+        }
+
+        rknn_outputs_release(rknn_ctx_, io_num_.n_output, outputs);
+
+        return detections;
+    }
+    #endif
 
     void loadROSCalibration(const std::string& filename, cv::Mat& K, cv::Mat& D, cv::Mat& R, cv::Mat& P)
     {
@@ -337,11 +509,13 @@ private:
     cv::Mat left_rect_, right_rect_;
     cv::Mat disparity_;
     cv::Mat disparity_float_;
+    cv::Mat left_rect_gray_, right_rect_gray_;
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_raw_, pub_right_raw_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_rect_, pub_right_rect_;
     rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr pub_disparity_;
     rclcpp::Publisher<stereo_vision_msgs::msg::PerformanceMetrics>::SharedPtr pub_performance_;
+    rclcpp::Publisher<stereo_vision_msgs::msg::DetectionArray>::SharedPtr pub_detections_;
 
     rclcpp::TimerBase::SharedPtr timer_, param_timer_;
 
@@ -355,6 +529,16 @@ private:
     std::mutex frame_mutex_;
     cv::Mat latest_frame_;
     std::atomic<bool> stop_processing_{false};
+
+    #ifdef ENABLE_RKNN
+    rknn_context rknn_ctx_;
+    rknn_input_output_num io_num_;
+    std::vector<rknn_tensor_attr> output_attrs_;
+    int model_width_;
+    int model_height_;
+    float scale_w_;
+    float scale_h_;
+    #endif
 };
 
 int main(int argc, char** argv)
