@@ -5,6 +5,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -57,7 +58,11 @@ if(IS_RK3588)
 
   add_definitions(-DENABLE_RKNN)
 else()
-  message(STATUS "Not an RK3588-based device. YOLO object detection will be disabled.")
+  find_package(onnxruntime)
+  find_library(ONNXRUNTIME_LIB onnxruntime HINTS /usr/local/lib)
+  include_directories(${onnxruntime_INCLUDE_DIRS})
+  message(STATUS "Not an RK3588-based device. YOLO object detection will use ONNX Runtime.")
+
 endif()
 
 include_directories(${stereo_vision_msgs_INCLUDE_DIRS})
@@ -99,6 +104,11 @@ if(IS_RK3588)
     ${CMAKE_CURRENT_SOURCE_DIR}/external/rknpu2/3rdparty/rga/librga.so
     postprocess
   )
+else()
+  target_link_libraries(stereo_vision
+    ${onnxruntime_LIBRARY}
+    ${ONNXRUNTIME_LIB}
+  )
 endif()
 
 install(TARGETS
@@ -114,11 +124,22 @@ install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME})
 
+install(DIRECTORY
+  models
+  DESTINATION share/${PROJECT_NAME}
+)
+
 if(IS_RK3588)
   install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/yolov5.rknn
     DESTINATION share/${PROJECT_NAME}/models
   )
+else(
+  install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/yolov5.onnx
+    DESTINATION share/${PROJECT_NAME}/models
+  )
+)
 endif()
 
 ament_package()
