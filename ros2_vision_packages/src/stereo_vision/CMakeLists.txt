@@ -16,6 +16,11 @@ find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(Threads REQUIRED)
 find_package(stereo_vision_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+include_directories(${stereo_vision_msgs_INCLUDE_DIRS})
+include_directories(${CMAKE_INSTALL_PREFIX}/include/stereo_vision_msgs)
+include_directories(${EIGEN3_INCLUDE_DIR})
 
 # Check if we're building for RK3588-based devices
 if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "aarch64" AND EXISTS "/proc/device-tree/model")
@@ -93,6 +98,7 @@ target_link_libraries(stereo_vision
   ${Threads_LIBRARIES}
   ${stereo_msgs_LIBRARIES}
   ${stereo_vision_msgs_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
 )
 
 if(IS_RK3588)

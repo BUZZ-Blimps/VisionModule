@@ -20,6 +20,20 @@
 #include "stereo_vision_msgs/msg/detection.hpp"
 #include "stereo_vision_msgs/msg/detection_array.hpp"
 #include <future>
+#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <Eigen/Dense>
+#include <fstream>
+#include <numeric>
+
+struct InputDetails {
+    std::vector<std::string> input_names;
+    std::vector<int64_t> input_shape;
+    int input_height;
+    int input_width;
+};
+
 
 #ifdef ENABLE_RKNN
 #include <rknn_api.h>
@@ -240,7 +254,7 @@ private:
             auto rectify_end = std::chrono::high_resolution_clock::now();
 
             // Start YOLO inference asynchronously
-            yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_);
+           yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_);
 
             // Compute disparity map
             auto disparity_start = std::chrono::high_resolution_clock::now();
@@ -354,8 +368,6 @@ private:
         msg.header.frame_id = "stereo_camera";
         msg.detections = detections;
         pub_detections_->publish(msg);
-        RCLCPP_INFO(this->get_logger(), "Published %zu detections", detections.size());
-        RCLCPP_INFO(this->get_logger(), "Detections: %s", detections[0].label.c_str());
     }
 
     #ifdef ENABLE_RKNN
@@ -511,16 +523,6 @@ private:
                 output_node_names_.push_back(name.c_str());
             }
 
-            // Print input and output node names for debugging
-            RCLCPP_INFO(this->get_logger(), "Input node names:");
-            for (const auto& name : input_node_names_) {
-                RCLCPP_INFO(this->get_logger(), "%s", name);
-            }
-            RCLCPP_INFO(this->get_logger(), "Output node names:");
-            for (const auto& name : output_node_names_) {
-                RCLCPP_INFO(this->get_logger(), "%s", name);
-            }
-
             Ort::TypeInfo type_info = ort_session_->GetInputTypeInfo(0);
             auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
             auto input_shape = tensor_info.GetShape();
@@ -537,28 +539,57 @@ private:
         }
     }
 
+    void exportTensorToFile(const std::vector<float>& tensor, const std::vector<int64_t>& shape, const std::string& filename) {
+        std::ofstream file(filename, std::ios::binary);
+        
+        // Write shape
+        int32_t shape_size = static_cast<int32_t>(shape.size());
+        file.write(reinterpret_cast<const char*>(&shape_size), sizeof(int32_t));
+        for (const auto& dim : shape) {
+            int32_t dim32 = static_cast<int32_t>(dim);
+            file.write(reinterpret_cast<const char*>(&dim32), sizeof(int32_t));
+        }
+        
+        // Write data
+        file.write(reinterpret_cast<const char*>(tensor.data()), tensor.size() * sizeof(float));
+        
+        file.close();
+    }
+
     std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::Mat& image)
     {
-        std::vector<stereo_vision_msgs::msg::Detection> detections;
-
         try {
             cv::Mat resized_image;
             cv::resize(image, resized_image, cv::Size(model_width_, model_height_));
-            cv::cvtColor(resized_image, resized_image, cv::COLOR_BGR2RGB);
 
-            std::vector<float> input_tensor_values(model_width_ * model_height_ * 3);
-            for (int i = 0; i < model_height_; i++) {
-                for (int j = 0; j < model_width_; j++) {
-                    for (int c = 0; c < 3; c++) {
-                        input_tensor_values[(i * model_width_ + j) * 3 + c] = resized_image.at<cv::Vec3b>(i, j)[c] / 255.0f;
+            // Convert BGR to RGB and normalize
+            cv::Mat rgb_image;
+            cv::cvtColor(resized_image, rgb_image, cv::COLOR_BGR2RGB);
+            rgb_image.convertTo(rgb_image, CV_32F, 1.0f / 255.0f);
+
+            // Create input tensor values
+            std::vector<float> input_tensor_values(1 * 3 * model_height_ * model_width_);
+            for (int c = 0; c < 3; ++c) {
+                for (int h = 0; h < model_height_; ++h) {
+                    for (int w = 0; w < model_width_; ++w) {
+                        int index = c * model_height_ * model_width_ + h * model_width_ + w;
+                        input_tensor_values[index] = rgb_image.at<cv::Vec3f>(h, w)[c];
                     }
                 }
             }
 
-            std::vector<int64_t> input_shape = {1, 3, model_height_, model_width_};
+            // Create Ort::MemoryInfo and Ort::Value
             Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-            Ort::Value input_tensor = Ort::Value::CreateTensor<float>(memory_info, input_tensor_values.data(), input_tensor_values.size(), input_shape.data(), input_shape.size());
+            std::vector<int64_t> input_shape = {1, 3, static_cast<int64_t>(model_height_), static_cast<int64_t>(model_width_)};
+            Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+                memory_info,
+                input_tensor_values.data(),
+                input_tensor_values.size(),
+                input_shape.data(),
+                input_shape.size()
+            );
 
+            // Run ONNX inference
             std::vector<Ort::Value> output_tensors;
             {
                 std::lock_guard<std::mutex> lock(ort_mutex_);
@@ -572,17 +603,198 @@ private:
                 );
             }
 
-            // Process output tensors and create detections
-            // This part depends on your ONNX model's output format
-            // You'll need to implement post-processing similar to the RKNN version
-
+            // Print output tensor shape
+            Ort::TypeInfo type_info = output_tensors[0].GetTypeInfo();
+            auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+            std::vector<int64_t> output_dims = tensor_info.GetShape();
+            
+            size_t output_size = std::accumulate(output_dims.begin(), output_dims.end(), 1, std::multiplies<int64_t>());
+            Eigen::Map<Eigen::MatrixXf> output_matrix(output_tensors[0].GetTensorMutableData<float>(), output_dims[2], output_dims[1]);
+            auto detections = process_output(output_matrix, *ort_session_, conf_threshold_, iou_threshold_);
             return detections;
+
         } catch (const Ort::Exception& e) {
             RCLCPP_ERROR(this->get_logger(), "ONNX Runtime inference error: %s", e.what());
-            return detections;
+            return std::vector<stereo_vision_msgs::msg::Detection>();
         }
     }
     #endif
+
+    InputDetails get_input_details(Ort::Session& session) {
+        InputDetails details;
+        Ort::AllocatorWithDefaultOptions allocator;
+
+        size_t num_input_nodes = session.GetInputCount();
+        for (size_t i = 0; i < num_input_nodes; i++) {
+            auto input_name = session.GetInputNameAllocated(i, allocator);
+            details.input_names.push_back(input_name.get());
+        }
+
+        auto input_shape = session.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+        details.input_shape = input_shape;
+        details.input_height = input_shape[2];
+        details.input_width = input_shape[3];
+
+        return details;
+    }
+
+    std::vector<int> nms(const Eigen::MatrixXf& boxes, const Eigen::VectorXf& scores, float iou_threshold) {
+        std::vector<int> sorted_indices(scores.size());
+        std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
+        std::sort(sorted_indices.begin(), sorted_indices.end(),
+                [&scores](int i1, int i2) { return scores(i1) > scores(i2); });
+
+        std::vector<int> keep_boxes;
+        while (!sorted_indices.empty()) {
+            int box_id = sorted_indices[0];
+            keep_boxes.push_back(box_id);
+
+            Eigen::VectorXf ious = compute_iou(boxes.row(box_id), boxes);
+
+            std::vector<int> keep_indices;
+            for (size_t i = 1; i < sorted_indices.size(); ++i) {
+                if (ious(sorted_indices[i]) < iou_threshold) {
+                    keep_indices.push_back(sorted_indices[i]);
+                }
+            }
+            sorted_indices = keep_indices;
+        }
+        return keep_boxes;
+    }
+
+    std::vector<int> multiclass_nms(const Eigen::MatrixXf& boxes, const Eigen::VectorXf& scores, 
+                                    const Eigen::VectorXi& class_ids, float iou_threshold) {
+        std::vector<int> unique_class_ids;
+        for (int i = 0; i < class_ids.size(); ++i) {
+            if (std::find(unique_class_ids.begin(), unique_class_ids.end(), class_ids(i)) == unique_class_ids.end()) {
+                unique_class_ids.push_back(class_ids(i));
+            }
+        }
+
+        std::vector<int> keep_boxes;
+
+        for (int class_id : unique_class_ids) {
+            std::vector<int> class_indices;
+            for (int i = 0; i < class_ids.size(); ++i) {
+                if (class_ids(i) == class_id) {
+                    class_indices.push_back(i);
+                }
+            }
+
+            Eigen::MatrixXf class_boxes(class_indices.size(), 4);
+            Eigen::VectorXf class_scores(class_indices.size());
+            for (size_t i = 0; i < class_indices.size(); ++i) {
+                class_boxes.row(i) = boxes.row(class_indices[i]);
+                class_scores(i) = scores(class_indices[i]);
+            }
+
+            std::vector<int> class_keep_boxes = nms(class_boxes, class_scores, iou_threshold);
+            for (int idx : class_keep_boxes) {
+                keep_boxes.push_back(class_indices[idx]);
+            }
+        }
+
+        return keep_boxes;
+    }
+
+    Eigen::VectorXf compute_iou(const Eigen::VectorXf& box, const Eigen::MatrixXf& boxes) {
+        Eigen::VectorXf xmin = boxes.col(0).cwiseMax(box(0));
+        Eigen::VectorXf ymin = boxes.col(1).cwiseMax(box(1));
+        Eigen::VectorXf xmax = boxes.col(2).cwiseMin(box(2));
+        Eigen::VectorXf ymax = boxes.col(3).cwiseMin(box(3));
+
+        Eigen::VectorXf intersection_area = (xmax - xmin).cwiseMax(0.0f).cwiseProduct(ymax - ymin).cwiseMax(0.0f);
+
+        float box_area = (box(2) - box(0)) * (box(3) - box(1));
+        Eigen::VectorXf boxes_area = (boxes.col(2) - boxes.col(0)).cwiseProduct(boxes.col(3) - boxes.col(1));
+        
+        // Create a vector of the same size as boxes_area, filled with box_area
+        Eigen::VectorXf box_area_vector = Eigen::VectorXf::Constant(boxes_area.size(), box_area);
+        
+        Eigen::VectorXf union_area = boxes_area + box_area_vector - intersection_area;
+
+        return intersection_area.cwiseQuotient(union_area);
+    }
+
+    Eigen::MatrixXf xywh2xyxy(const Eigen::MatrixXf& x) {
+        Eigen::MatrixXf y = x;
+        y.col(0) = x.col(0) - x.col(2) / 2.0f;
+        y.col(1) = x.col(1) - x.col(3) / 2.0f;
+        y.col(2) = x.col(0) + x.col(2) / 2.0f;
+        y.col(3) = x.col(1) + x.col(3) / 2.0f;
+        return y;
+    }
+
+    Eigen::MatrixXf extract_boxes(const Eigen::MatrixXf& predictions, int input_width, int input_height, 
+                                int img_width, int img_height) {
+        Eigen::MatrixXf boxes = predictions.leftCols(4);
+        boxes = rescale_boxes(boxes, input_width, input_height, img_width, img_height);
+        return xywh2xyxy(boxes);
+    }
+
+    Eigen::MatrixXf rescale_boxes(const Eigen::MatrixXf& boxes, int input_width, int input_height, 
+                                int img_width, int img_height) {
+        Eigen::Vector4f input_shape(input_width, input_height, input_width, input_height);
+        Eigen::Vector4f img_shape(img_width, img_height, img_width, img_height);
+        return (boxes.array().rowwise() / input_shape.transpose().array()).rowwise() * img_shape.transpose().array();
+    }
+
+    std::vector<stereo_vision_msgs::msg::Detection> process_output(const Eigen::MatrixXf& output, Ort::Session& session, 
+                                                                  float conf_threshold, float iou_threshold) {
+        std::vector<stereo_vision_msgs::msg::Detection> detections;
+
+        InputDetails input_details = get_input_details(session);
+        Eigen::MatrixXf predictions = output;
+
+        // Calculate scores (maximum of class probabilities)
+        Eigen::VectorXf scores = predictions.rightCols(predictions.cols() - 4).rowwise().maxCoeff();
+
+        // Create a vector to store indices of predictions above the confidence threshold
+        std::vector<int> keep_indices;
+        for (int i = 0; i < scores.size(); ++i) {
+            if (scores(i) > conf_threshold) {
+                keep_indices.push_back(i);
+            }
+        }
+
+        // Create new matrices for filtered predictions and scores
+        Eigen::MatrixXf filtered_predictions(keep_indices.size(), predictions.cols());
+        Eigen::VectorXf filtered_scores(keep_indices.size());
+
+        for (size_t i = 0; i < keep_indices.size(); ++i) {
+            filtered_predictions.row(i) = predictions.row(keep_indices[i]);
+            filtered_scores(i) = scores(keep_indices[i]);
+        }
+
+        predictions = filtered_predictions;
+        scores = filtered_scores;
+
+        // Calculate class IDs for the filtered predictions
+        Eigen::VectorXi class_ids = predictions.rightCols(predictions.cols() - 4).rowwise().maxCoeff().cast<int>();
+
+        // Extract boxes from the filtered predictions
+        Eigen::MatrixXf boxes = extract_boxes(predictions, input_details.input_width, input_details.input_height, 
+                                            img_width_, img_height_);
+
+        // Apply NMS (Non-Maximum Suppression)
+        std::vector<int> nms_indices = multiclass_nms(boxes, scores, class_ids, iou_threshold);
+
+        //Log the number of detections
+        RCLCPP_INFO(this->get_logger(), "Number of detections: %zu", nms_indices.size());
+
+        for (int idx : nms_indices) {
+            stereo_vision_msgs::msg::Detection detection;
+            detection.label = std::to_string(class_ids(idx));
+                detection.bbox[0] = boxes(idx, 0);
+                detection.bbox[1] = boxes(idx, 1);
+                detection.bbox[2] = boxes(idx, 2);
+                detection.bbox[3] = boxes(idx, 3);
+                detection.confidence = scores(idx);
+                detections.push_back(detection);
+            }
+
+        return detections;
+    }
 
     void loadROSCalibration(const std::string& filename, cv::Mat& K, cv::Mat& D, cv::Mat& R, cv::Mat& P)
     {
@@ -655,24 +867,30 @@ private:
     std::atomic<bool> stop_processing_{false};
 
     #ifdef ENABLE_RKNN
-    rknn_context rknn_ctx_;
-    rknn_input_output_num io_num_;
-    std::vector<rknn_tensor_attr> output_attrs_;
+        rknn_context rknn_ctx_;
+        rknn_input_output_num io_num_;
+        std::vector<rknn_tensor_attr> output_attrs_;
     #else
-    Ort::Env ort_env_{ORT_LOGGING_LEVEL_WARNING, "stereo_vision"};
-    std::unique_ptr<Ort::Session> ort_session_;
-    std::vector<const char*> input_node_names_;
-    std::vector<const char*> output_node_names_;
-    std::vector<std::string> input_node_names_str_;
-    std::vector<std::string> output_node_names_str_;
-    std::mutex ort_mutex_;
+        Ort::Env ort_env_{ORT_LOGGING_LEVEL_WARNING, "stereo_vision"};
+        std::unique_ptr<Ort::Session> ort_session_;
+        std::vector<const char*> input_node_names_;
+        std::vector<const char*> output_node_names_;
+        std::vector<std::string> input_node_names_str_;
+        std::vector<std::string> output_node_names_str_;
+        std::mutex ort_mutex_;
     #endif
     
     int model_width_;
     int model_height_;
     float scale_w_;
     float scale_h_;
+
     std::future<std::vector<stereo_vision_msgs::msg::Detection>> yolo_future_;
+
+    float conf_threshold_ = 0.25f;  // You can adjust this value
+    float iou_threshold_ = 0.9f;   // You can adjust this value
+    int img_width_ = 1280;  // Set this to your image width
+    int img_height_ = 960;  // Set this to your image height
 };
 
 int main(int argc, char** argv)
