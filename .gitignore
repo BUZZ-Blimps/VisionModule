@@ -34,3 +34,4 @@ ros2_vision_packages/src/stereo_vision/calibration/*
 # But don't ignore the folder itself
 !ros2_vision_packages/src/stereo_vision/calibration/.gitkeep
 ros2_vision_packages/*.png
+*.jpg
