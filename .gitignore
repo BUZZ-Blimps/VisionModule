@@ -35,3 +35,5 @@ ros2_vision_packages/src/stereo_vision/calibration/*
 !ros2_vision_packages/src/stereo_vision/calibration/.gitkeep
 ros2_vision_packages/*.png
 *.jpg
+
+DatasetGenerator/*
