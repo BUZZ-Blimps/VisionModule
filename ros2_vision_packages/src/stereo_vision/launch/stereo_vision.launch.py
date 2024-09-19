@@ -30,6 +30,11 @@ def generate_launch_description():
             default_value='1',
             description='Camera number for calibration file naming'
         ),
+        DeclareLaunchArgument(
+            'model_path',
+            default_value='yolov5.rknn',
+            description='Path to rknn model file'
+        ),
         Node(
             package='stereo_vision',
             executable='stereo_vision',
@@ -40,6 +45,7 @@ def generate_launch_description():
                 'node_namespace': LaunchConfiguration('node_namespace'),
                 'publish_intermediate': LaunchConfiguration('publish_intermediate'),
                 'camera_number': LaunchConfiguration('camera_number'),
+                'model_path': LaunchConfiguration('model_path'),
             }],
             output='screen'
         )

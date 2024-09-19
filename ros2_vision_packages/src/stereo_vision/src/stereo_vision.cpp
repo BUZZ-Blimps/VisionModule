@@ -30,9 +30,6 @@
 #include "postprocess.h"
 #include "rk_common.h"
 
-const std::string rknn_model_path_ = ament_index_cpp::get_package_share_directory("stereo_vision") + "/models/yolov10n.rknn";
-
-
 class StereoCameraNode : public rclcpp::Node
 {
 public:
@@ -44,6 +41,7 @@ public:
         this->declare_parameter("publish_intermediate", true);
         this->declare_parameter("node_namespace", "BurnCreamBlimp");
         this->declare_parameter("camera_number", 1);
+        this->declare_parameter("model_path", "yolov5.rknn");
 
         // Disparity map parameters
         this->declare_parameter("min_disparity", 0);
@@ -60,6 +58,7 @@ public:
         publish_intermediate_ = this->get_parameter("publish_intermediate").as_bool();
         node_namespace_ = this->get_parameter("node_namespace").as_string();
         camera_number_ = this->get_parameter("camera_number").as_int();
+        model_path_ = this->get_parameter("model_path").as_string();
 
         // Initialize camera
         cap_.open(camera_index_, cv::CAP_V4L2);
@@ -210,11 +209,14 @@ private:
             auto rectify_start = std::chrono::high_resolution_clock::now();
             cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
             cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
+            
+            cv::resize(left_rect_, left_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+            cv::resize(right_rect_, right_rect_, cv::Size(640,640), cv::INTER_LINEAR);
             auto rectify_end = std::chrono::high_resolution_clock::now();
 
-            // cv::Mat parkingImage = cv::imread("/home/opi/GitHub/VisionModule/parking.jpg");
-            // cv::cvtColor(parkingImage, parkingImage, cv::COLOR_BGR2RGB);
-            // cv::resize(parkingImage, parkingImage, cv::Size(640,640));
+            //cv::Mat parkingImage = cv::imread("/home/opi/GitHub/VisionModule/27999c38-frame02366.jpg");
+            //cv::cvtColor(parkingImage, parkingImage, cv::COLOR_BGR2RGB);
+            //cv::resize(parkingImage, parkingImage, cv::Size(640,640));
 
             // Start YOLO inference asynchronously
            yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_);
@@ -226,9 +228,6 @@ private:
             cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
             cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
             auto debay_end = std::chrono::high_resolution_clock::now();
-
-            cv::resize(left_debay_, left_debay_, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            cv::resize(right_debay_, right_debay_, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
 
             stereo_->compute(left_debay_, right_debay_, disparity_);
             auto disparity_end = std::chrono::high_resolution_clock::now();
@@ -343,7 +342,9 @@ private:
     {
         memset(&rknn_app_ctx, 0, sizeof(rknn_app_context_t));
 
-        int ret = rknn_init(&rknn_ctx_, const_cast<void*>(static_cast<const void*>(rknn_model_path_.c_str())), 0, 0, NULL);
+        std::cout << "Path to RKNN file: " << model_path_.c_str() << std::endl;
+
+        int ret = rknn_init(&rknn_ctx_, const_cast<void*>(static_cast<const void*>(model_path_.c_str())), 0, 0, NULL);
         if (ret < 0) {
             RCLCPP_ERROR(this->get_logger(), "rknn_init fail! ret=%d", ret);
             return false;
@@ -364,6 +365,7 @@ private:
                 RCLCPP_ERROR(this->get_logger(), "rknn_query fail! ret=%d", ret);
                 return false;
             }
+            dump_tensor_attr(&(input_attrs[i]));
         }
 
         output_attrs_.resize(io_num_.n_output);
@@ -375,13 +377,16 @@ private:
                 RCLCPP_ERROR(this->get_logger(), "rknn_query fail! ret=%d", ret);
                 return false;
             }
+            dump_tensor_attr(&(output_attrs_[i]));
         }
+
+        rknn_app_ctx.rknn_ctx  = rknn_ctx_;
 
         model_width_ = input_attrs[0].dims[2];
         model_height_ = input_attrs[0].dims[1];
-
-        scale_w_ = (float)model_width_ / image_size_.width;
-        scale_h_ = (float)model_height_ / image_size_.height;
+        model_channel_ = input_attrs[0].dims[3];
+        scale_w_ = (float)model_width_ / 640;
+        scale_h_ = (float)model_height_ / 640;
 
         if (output_attrs_[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC && output_attrs_[0].type != RKNN_TENSOR_FLOAT16)
         {
@@ -396,7 +401,7 @@ private:
         rknn_app_ctx.input_attrs = (rknn_tensor_attr *)malloc(io_num_.n_input * sizeof(rknn_tensor_attr));
         memcpy(rknn_app_ctx.input_attrs, input_attrs, io_num_.n_input * sizeof(rknn_tensor_attr));
         rknn_app_ctx.output_attrs = (rknn_tensor_attr *)malloc(io_num_.n_output * sizeof(rknn_tensor_attr));
-        memcpy(rknn_app_ctx.output_attrs, output_attrs_.data(), io_num_.n_output * sizeof(rknn_tensor_attr));
+        memcpy(rknn_app_ctx.output_attrs, output_attrs_.data() , io_num_.n_output * sizeof(rknn_tensor_attr));
 
         if (input_attrs[0].fmt == RKNN_TENSOR_NCHW){
             printf("model input is NCHW\n");
@@ -413,54 +418,61 @@ private:
         printf("model input height=%d, width=%d, channel=%d\n",
             rknn_app_ctx.model_height, rknn_app_ctx.model_width, rknn_app_ctx.model_channel);
 
-        // You may not need resize when src resolution equals to dst resolution
-        void* buf = nullptr;
-        cv::Mat orig_img;
-        cv::Mat img;
-        cv::Mat resized_img;
-        int width   = rknn_app_ctx.model_width;
-        int height  = rknn_app_ctx.model_height;
-        rknn_input inputs[rknn_app_ctx.io_num.n_input];
-        rknn_output outputs[rknn_app_ctx.io_num.n_output];
-
         return true;
     }
 
     std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::Mat& image)
     {
+        int ret;
         std::vector<stereo_vision_msgs::msg::Detection> detections;
+        cv::Mat input_image;
+        cv::cvtColor(image, input_image, cv::COLOR_BGR2RGB);
 
-        // Preprocess image
-        cv::Mat resized_image;
-        cv::resize(image, resized_image, cv::Size(640, 480));
-        cv::cvtColor(resized_image, resized_image, cv::COLOR_BGR2RGB);
+        rknn_input inputs[io_num_.n_input];
+        rknn_output outputs[io_num_.n_output];
+        object_detect_result_list od_results;   
+
+        memset(inputs, 0, sizeof(inputs));
+        memset(outputs, 0, sizeof(outputs));
 
         // Set input
-        rknn_input inputs[1];
-        memset(inputs, 0, sizeof(inputs));
         inputs[0].index = 0;
         inputs[0].type = RKNN_TENSOR_UINT8;
-        inputs[0].size = model_width_ * model_height_ * 3;
+        inputs[0].size = model_width_ * model_height_ * model_channel_;
         inputs[0].fmt = RKNN_TENSOR_NHWC;
-        inputs[0].buf = image.data;
+        inputs[0].buf = input_image.data;
 
-        rknn_inputs_set(rknn_ctx_, 1, inputs);
+        ret = rknn_inputs_set(rknn_ctx_, io_num_.n_input, inputs);
+        if (ret < 0)
+        {
+            std::cout << "rknn_input_set fail! ret=" << ret << std::endl;
+            return detections;
+        }
 
-        // Run inference
-        rknn_output outputs[io_num_.n_output];
+        // Run
+        ret = rknn_run(rknn_ctx_, nullptr);
+        if (ret < 0)
+        {
+            std::cout << "rknn_run fail! ret=" << ret << std::endl;
+            return detections;
+        }
+
         memset(outputs, 0, sizeof(outputs));
         for (int i = 0; i < io_num_.n_output; i++)
         {
             outputs[i].index = i;
-            outputs[i].want_float = 0;
+            outputs[i].want_float = (!rknn_app_ctx.is_quant);
         }
 
-        object_detect_result_list od_results;
-
-        int ret = rknn_run(rknn_ctx_, NULL);
         ret = rknn_outputs_get(rknn_ctx_, io_num_.n_output, outputs, NULL);
+        if (ret < 0)
+        {
+            std::cout << "rknn_outputs_get fail! ret=" << ret << std::endl;
+            return detections;
+        }
 
-        post_process(&rknn_app_ctx, outputs, box_conf_threshold, nms_threshold, scale_w_, scale_h_, &od_results);
+        post_process(&rknn_app_ctx, outputs, box_conf_threshold, nms_threshold, &od_results);
+
         std::cout << "FOUND " <<od_results.count << " OBJECTS!" << std::endl; 
         for (int i = 0; i < od_results.count; i++) {
             object_detect_result* det_result = &(od_results.results[i]);
@@ -503,6 +515,7 @@ private:
 
             if (image_size_.empty()) {
                 image_size_ = cv::Size(config["image_width"].as<int>(), config["image_height"].as<int>());
+                std::cout << "Image size: " << image_size_ << std::endl;
             }
 
             std::cout << "Loaded calibration from " << filename << std::endl;
@@ -550,6 +563,7 @@ private:
     bool publish_intermediate_;
     std::string node_namespace_;
     int camera_number_;
+    std::string model_path_;
 
     std::thread processing_thread_;
     std::mutex frame_mutex_;
@@ -558,7 +572,7 @@ private:
 
 
     rknn_app_context_t rknn_app_ctx;
-    rknn_context rknn_ctx_;
+    rknn_context rknn_ctx_ = 0;
     rknn_input_output_num io_num_;
     std::vector<rknn_tensor_attr> output_attrs_;
         const float    nms_threshold      = NMS_THRESH;
@@ -566,6 +580,7 @@ private:
     
     int model_width_;
     int model_height_;
+    int model_channel_;
     float scale_w_;
     float scale_h_;
 
@@ -573,8 +588,8 @@ private:
 
     float conf_threshold_ = 0.25f;  // You can adjust this value
     float iou_threshold_ = 0.9f;   // You can adjust this value
-    int img_width_ = 1280;  // Set this to your image width
-    int img_height_ = 960;  // Set this to your image height
+    int img_width_ = 640;  // Set this to your image width
+    int img_height_ = 640;  // Set this to your image height
 };
 
 int main(int argc, char** argv)

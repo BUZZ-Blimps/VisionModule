@@ -95,9 +95,4 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(FILES
-  ${CMAKE_CURRENT_SOURCE_DIR}/models/yolov10n.rknn
-  DESTINATION share/${PROJECT_NAME}/models
-)
-
 ament_package()

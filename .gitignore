@@ -13,7 +13,6 @@ __pycache__/
 
 # C++ build artifacts
 *.o
-*.so
 *.a
 
 # IDE-specific files
