@@ -199,19 +199,32 @@ private:
             auto start_time = std::chrono::high_resolution_clock::now();
 
             auto split_start = std::chrono::high_resolution_clock::now();
-
             cv::Rect left_roi(0, 0, frame.cols / 2, frame.rows);
             cv::Rect right_roi(frame.cols / 2, 0, frame.cols / 2, frame.rows);
             left_raw_ = frame(left_roi);
             right_raw_ = frame(right_roi);
             auto split_end = std::chrono::high_resolution_clock::now();
 
+            cv::Mat left_rect_resized;
+            cv::resize(left_rect_, left_rect_resized, cv::Size(640,640), cv::INTER_LINEAR);
+            yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_resized);
+
             auto rectify_start = std::chrono::high_resolution_clock::now();
-            cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
-            cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
-            
-            cv::resize(left_rect_, left_rect_, cv::Size(640,640), cv::INTER_LINEAR);
-            cv::resize(right_rect_, right_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+            #pragma omp parallel sections
+            {
+                #pragma omp section
+                {
+                    cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
+                    cv::resize(left_rect_, left_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+                    cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
+                }
+                #pragma omp section
+                {
+                    cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
+                    cv::resize(right_rect_, right_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+                    cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
+                }
+            }
             auto rectify_end = std::chrono::high_resolution_clock::now();
 
             //cv::Mat parkingImage = cv::imread("/home/opi/GitHub/VisionModule/27999c38-frame02366.jpg");
@@ -219,16 +232,10 @@ private:
             //cv::resize(parkingImage, parkingImage, cv::Size(640,640));
 
             // Start YOLO inference asynchronously
-           yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_);
+            //yolo_future_ = std::async(std::launch::async, &StereoCameraNode::performYOLOInference, this, left_rect_);
 
             // Compute disparity map
             auto disparity_start = std::chrono::high_resolution_clock::now();
-
-            auto debay_start = std::chrono::high_resolution_clock::now();
-            cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
-            cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
-            auto debay_end = std::chrono::high_resolution_clock::now();
-
             stereo_->compute(left_debay_, right_debay_, disparity_);
             auto disparity_end = std::chrono::high_resolution_clock::now();
 
@@ -242,8 +249,19 @@ private:
             // Publish results
             publishImages(left_raw_, right_raw_, left_rect_, right_rect_, left_debay_, right_debay_, disparity_);
             publishDetections(detections);
-            publishPerformanceMetrics(split_start, split_end, debay_start, debay_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
+            publishPerformanceMetrics(split_start, split_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
         }
+    }
+
+    double monoDepthEstimator(double bbox_area)
+    {
+        // Model coefficients
+        const double a = 2.329;
+        const double b = -0.0001485;
+        const double c = 0.8616;
+        const double d = -0.8479e-05;
+
+        return a * std::exp(b * bbox_area) + c * std::exp(d * bbox_area);
     }
 
     void updateDisparityMapParams()
@@ -302,8 +320,6 @@ private:
     void publishPerformanceMetrics(
         const std::chrono::high_resolution_clock::time_point& split_start,
         const std::chrono::high_resolution_clock::time_point& split_end,
-        const std::chrono::high_resolution_clock::time_point& debay_start,
-        const std::chrono::high_resolution_clock::time_point& debay_end,
         const std::chrono::high_resolution_clock::time_point& rectify_start,
         const std::chrono::high_resolution_clock::time_point& rectify_end,
         const std::chrono::high_resolution_clock::time_point& disparity_start,
@@ -316,7 +332,6 @@ private:
         auto msg = stereo_vision_msgs::msg::PerformanceMetrics();
 
         msg.split_time = std::chrono::duration_cast<std::chrono::microseconds>(split_end - split_start).count() / 1000.0;
-        msg.debay_time = std::chrono::duration_cast<std::chrono::microseconds>(debay_end - debay_start).count() / 1000.0;
         msg.rectify_time = std::chrono::duration_cast<std::chrono::microseconds>(rectify_end - rectify_start).count() / 1000.0;
         msg.disparity_time = std::chrono::duration_cast<std::chrono::microseconds>(disparity_end - disparity_start).count() / 1000.0;
         msg.yolo_time = std::chrono::duration_cast<std::chrono::microseconds>(yolo_end - yolo_start).count() / 1000.0;
@@ -491,6 +506,7 @@ private:
             detection.bbox[2] = x2 - x1;
             detection.bbox[3] = y2 - y1;
             detection.confidence = prob;
+            detection.depth = monoDepthEstimator(detection.bbox[2] * detection.bbox[3]);
             detections.push_back(detection);
         }
 

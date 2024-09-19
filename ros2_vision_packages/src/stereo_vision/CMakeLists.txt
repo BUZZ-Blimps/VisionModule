@@ -17,6 +17,7 @@ find_package(yaml-cpp REQUIRED)
 find_package(Threads REQUIRED)
 find_package(stereo_vision_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(OpenMP REQUIRED)
 
 include_directories(${stereo_vision_msgs_INCLUDE_DIRS})
 include_directories(${CMAKE_INSTALL_PREFIX}/include/stereo_vision_msgs)
@@ -70,6 +71,7 @@ target_link_libraries(stereo_vision
   ${stereo_msgs_LIBRARIES}
   ${stereo_vision_msgs_LIBRARIES}
   ${EIGEN3_LIBRARIES}
+  OpenMP::OpenMP_CXX
 )
 
 target_link_libraries(stereo_vision
