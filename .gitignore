@@ -27,8 +27,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Ignore all files in the calibration folder
-ros2_vision_packages/src/stereo_vision/calibration/*
 
 # But don't ignore the folder itself
 !ros2_vision_packages/src/stereo_vision/calibration/.gitkeep
