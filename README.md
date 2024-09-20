@@ -48,6 +48,7 @@ The node uses several parameters that can be configured:
 - `publish_intermediate`: Whether to publish intermediate images (default: true)
 - `node_namespace`: Namespace for the node (default: "BurnCreamBlimp")
 - `camera_number`: Camera number for calibration files (default: 1)
+- `model_path`: Path to rknn model weights file (required)
 
 Disparity map parameters:
 - `min_disparity`
@@ -61,7 +62,7 @@ Disparity map parameters:
 You can set these parameters when launching the node:
 
 ```
-ros2 run stereo_vision stereo_vision --ros-args -p camera_index:=1 -p publish_intermediate:=false
+ros2 launch stereo_vision stereo_vision camera_index:=1 publish_intermediate:=false node_namespace:="BurnCreamBlimp" camera_numer:=4 model_path:=<path to .rknn file>
 ```
 
 ## Topics
@@ -73,12 +74,14 @@ The node publishes the following topics:
 - `<namespace>/left_rect`: Rectified left camera image
 - `<namespace>/right_rect`: Rectified right camera image
 - `<namespace>/disparity`: Disparity image
+- `<namespace>/detections: YOLO Detections message
 
 Performance measurement topics:
 - `performance/split_time`
 - `performance/debay_time`
 - `performance/rectify_time`
 - `performance/disparity_time`
+- `performance/yolo_time`
 - `performance/total_time`
 - `performance/total_sum_time`
 - `performance/fps`
