@@ -5,6 +5,8 @@
 #include <yaml-cpp/yaml.h>
 #include "stereo_camera_node.hpp"
 
+double flength;
+double baseline;
 void updateDisparityMapParams(cv::Ptr<cv::StereoBM>& stereo, const rclcpp::Node* node)
 {
     stereo->setMinDisparity(node->get_parameter("min_disparity").as_int());
@@ -60,39 +62,57 @@ double monoDepthEstimator(double bbox_area)
 
 void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, const stereo_msgs::msg::DisparityImage& disparity_msg)
 {
-    cv::Mat_<float> depth(disparity_msg.image.height, disparity_msg.image.width);
-    float f = disparity_msg.f;
-    float T = disparity_msg.t;
-    const float* disp_data = reinterpret_cast<const float*>(&disparity_msg.image.data[0]);
-    
-    for (int y = 0; y < depth.rows; ++y) {
-        for (int x = 0; x < depth.cols; ++x) {
-            float disparity = disp_data[y * depth.cols + x];
-            depth(y, x) = (disparity > disparity_msg.min_disparity) ? (f * T / disparity) : 0.0f;
-        }
+    cv::Mat disparity;
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        cv_ptr = cv_bridge::toCvCopy(disparity_msg.image, sensor_msgs::image_encodings::TYPE_32FC1);
+    } catch (cv_bridge::Exception& e) {
+        throw std::runtime_error("cv_bridge exception: " + std::string(e.what()));
     }
 
-    for (auto& detection : detections)
-    {
-        // Mono depth estimation
+    for (auto& detection : detections) {
+
+        //mono depth
         double bbox_area = detection.bbox[2] * detection.bbox[3]; // width * height
         double mono_depth = monoDepthEstimator(bbox_area);
 
-        // Disparity-based depth estimation
-        int x = static_cast<int>(detection.bbox[0] + detection.bbox[2] / 2);
-        int y = static_cast<int>(detection.bbox[1] + detection.bbox[3] / 2);
-        float disparity_depth = depth(y, x);
-
-        // Select the minimum of the two depth estimates
-        detection.depth = std::min(static_cast<float>(mono_depth), disparity_depth);
-
+        //disparity depth
+        std::vector<float> valid_disparities;
+        int x1 = detection.bbox[0];
+        int y1 = detection.bbox[1];
+        int width = detection.bbox[2];
+        int height = detection.bbox[3];
+        int center_x = x1 + width / 2;
+        int center_y = y1 + height / 2;
+        for (int i = x1; i <= x1 + width - 1; i++) {
+            for (int j = y1; j <= y1 + height - 1; j++) {
+                double disparity_value = cv_ptr->image.at<float>(i, j);
+                if (!std::isnan(disparity_value) && disparity_value > 0) {
+                    valid_disparities.push_back(disparity_value);
+                }
+            }
+        }
+        float depth;
+        if (!valid_disparities.empty()) {
+            std::sort(valid_disparities.begin(), valid_disparities.end());
+            float median = valid_disparities[valid_disparities.size() / 2];
+            median = median * 2;
+            depth = (disparity_msg.f * disparity_msg.t) / median;
+            //std::cout << "Rao's Depth: " << detection.depth << " New Depth: " << depth << std::endl;
+            if (median == 0) {
+              detection.depth = mono_depth;  
+            } else if (mono_depth > depth) {
+                detection.depth = depth;
+            } else {
+                detection.depth = mono_depth;
+            }
+        }
         // Print both depths for testing purposes
         std::cout << "Detection: " << detection.label 
-                  << ", Mono depth: " << mono_depth 
-                  << ", Disparity depth: " << disparity_depth 
-                  << ", Selected depth: " << detection.depth << std::endl;
+                << ", Mono depth: " << mono_depth 
+                << ", Disparity depth: " << depth 
+                << ", Selected depth: " << detection.depth << std::endl;
     }
-    return;
 }
 
 stereo_msgs::msg::DisparityImage::SharedPtr convertToDisparityImageMsg(const cv::Mat& disparity, const StereoCameraNode* node)
