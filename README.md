@@ -62,7 +62,7 @@ Disparity map parameters:
 You can set these parameters when launching the node:
 
 ```
-ros2 launch stereo_vision stereo_vision camera_index:=1 publish_intermediate:=false node_namespace:="BurnCreamBlimp" camera_numer:=4 model_path:=<path to .rknn file>
+ros2 launch stereo_vision stereo_vision.launch.py camera_index:=1 publish_intermediate:=false node_namespace:="BurnCreamBlimp" camera_number:=4 model_path:=<path to .rknn file>
 ```
 
 ## Topics
