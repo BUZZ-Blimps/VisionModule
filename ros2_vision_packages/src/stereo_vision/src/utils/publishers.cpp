@@ -55,11 +55,77 @@ void publishPerformanceMetrics(
 
 void publishDetections(const StereoCameraNode* node, const std::vector<stereo_vision_msgs::msg::Detection>& detections)
 {
-    if (!detections.empty()) {
-        auto msg = stereo_vision_msgs::msg::DetectionArray();
-        msg.header.stamp = node->now();
-        msg.header.frame_id = "stereo_camera";
-        msg.detections = detections;
-        node->pub_detections_->publish(msg);
+    stereo_vision_msgs::msg::DetectionArray detection_array_msg;
+    detection_array_msg.header.stamp = node->now();
+    detection_array_msg.header.frame_id = "camera_frame";
+    detection_array_msg.detections = detections;
+
+    node->pub_detections_->publish(detection_array_msg);
+
+    // Initialize variables to store the largest detections
+    stereo_vision_msgs::msg::Detection largest_balloon;
+    stereo_vision_msgs::msg::Detection largest_orange_goal;
+    stereo_vision_msgs::msg::Detection largest_yellow_goal;
+    float largest_balloon_area = 0;
+    float largest_orange_goal_area = 0;
+    float largest_yellow_goal_area = 0;
+
+    // Iterate through detections
+    for (const auto& detection : detections) {
+        float area = detection.bbox[2] * detection.bbox[3];  // width * height
+        TargetClass target_class = static_cast<TargetClass>(detection.class_id);
+        
+        switch (target_class) {
+            case TargetClass::GreenBalloon:
+            case TargetClass::PurpleBalloon:
+                if (area > largest_balloon_area) {
+                    largest_balloon = detection;
+                    largest_balloon_area = area;
+                }
+                break;
+            case TargetClass::RedCircle:
+            case TargetClass::RedSquare:
+            case TargetClass::RedTriangle:
+                if (area > largest_orange_goal_area) {
+                    largest_orange_goal = detection;
+                    largest_orange_goal_area = area;
+                }
+                break;
+            case TargetClass::YellowCircle:
+            case TargetClass::YellowSquare:
+            case TargetClass::YellowTriangle:
+                if (area > largest_yellow_goal_area) {
+                    largest_yellow_goal = detection;
+                    largest_yellow_goal_area = area;
+                }
+                break;
+            default:
+                break;
+        }
     }
+
+    // Create and populate targets_msg
+    std_msgs::msg::Float64MultiArray targets_msg;
+    targets_msg.data.resize(9);
+    for (int i = 0; i < 9; i++) {
+        targets_msg.data[i] = -1.0;
+    }
+    
+    auto populate_target = [](const stereo_vision_msgs::msg::Detection& detection, std::vector<double>& data, int offset) {
+        if (detection.class_id == -1) {
+            data[offset] = 1000.0;
+            data[offset + 1] = 1000.0;
+            data[offset + 2] = 1000.0;
+        } else {
+            data[offset] = detection.bbox[0] + detection.bbox[2] / 2.0;  // center x
+            data[offset + 1] = detection.bbox[1] + detection.bbox[3] / 2.0;  // center y
+            data[offset + 2] = detection.depth;
+        }
+    };
+
+    populate_target(largest_balloon, targets_msg.data, 0);
+    populate_target(largest_orange_goal, targets_msg.data, 3);
+    populate_target(largest_yellow_goal, targets_msg.data, 6);
+
+    node->pub_targets_->publish(targets_msg);
 }

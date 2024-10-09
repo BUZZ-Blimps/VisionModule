@@ -124,7 +124,7 @@ std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::M
         float prob = det_result->prop;
 
         stereo_vision_msgs::msg::Detection detection;
-        detection.label = std::to_string(cls);
+        detection.class_id = cls;
         detection.bbox[0] = x1;
         detection.bbox[1] = y1;
         detection.bbox[2] = x2 - x1;

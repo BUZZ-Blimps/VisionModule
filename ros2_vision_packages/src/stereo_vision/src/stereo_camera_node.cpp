@@ -117,6 +117,7 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
 
     // Create detections publisher
     pub_detections_ = this->create_publisher<stereo_vision_msgs::msg::DetectionArray>(node_namespace_ + "/detections", 10);
+    pub_targets_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(node_namespace_ + "/targets", 10);
 
     // Create timer for main loop
     timer_ = this->create_wall_timer(std::chrono::milliseconds(33), std::bind(&StereoCameraNode::timerCallback, this));
