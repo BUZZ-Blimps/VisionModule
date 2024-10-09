@@ -108,7 +108,7 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
             }
         }
         // Print both depths for testing purposes
-        std::cout << "Detection: " << detection.label 
+        std::cout << "Detection: " << detection.class_id 
                 << ", Mono depth: " << mono_depth 
                 << ", Disparity depth: " << depth 
                 << ", Selected depth: " << detection.depth << std::endl;
