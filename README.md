@@ -69,12 +69,10 @@ ros2 launch stereo_vision stereo_vision.launch.py camera_index:=1 publish_interm
 
 The node publishes the following topics:
 
-- `<namespace>/left_raw`: Raw left camera image
-- `<namespace>/right_raw`: Raw right camera image
-- `<namespace>/left_rect`: Rectified left camera image
-- `<namespace>/right_rect`: Rectified right camera image
+- `<namespace>/left_rect/compressed`: Rectified left camera image (compressed)
+- `<namespace>/right_rect/compressed`: Rectified right camera image (compressed)
 - `<namespace>/disparity`: Disparity image
-- `<namespace>/detections: YOLO Detections message
+- `<namespace>/detections`: YOLO Detections message
 
 Performance measurement topics:
 - `performance/split_time`

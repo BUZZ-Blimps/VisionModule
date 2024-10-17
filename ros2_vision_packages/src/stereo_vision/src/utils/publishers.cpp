@@ -3,28 +3,27 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
 
-void publishImages(const StereoCameraNode* node, const cv::Mat& left_raw, const cv::Mat& right_raw, const cv::Mat& left_rect, const cv::Mat& right_rect, const cv::Mat& left_rect_debay, const cv::Mat& right_rect_debay, const stereo_msgs::msg::DisparityImage::SharedPtr& disparity_msg)
+void publishImages(const StereoCameraNode* node, const cv::Mat& left_rect, const cv::Mat& right_rect, const stereo_msgs::msg::DisparityImage::SharedPtr& disparity_msg)
 {
     static auto last_publish_time = std::chrono::steady_clock::now();
     auto current_time = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_publish_time).count() >= 100) {
         if (node->publish_intermediate_) {
-            publishImage(node->pub_left_raw_, left_raw, sensor_msgs::image_encodings::MONO8);
-            publishImage(node->pub_right_raw_, right_raw, sensor_msgs::image_encodings::MONO8);
-            publishImage(node->pub_left_rect_, left_rect, sensor_msgs::image_encodings::BGR8);
-            publishImage(node->pub_right_rect_, right_rect, sensor_msgs::image_encodings::BGR8);
-            publishImage(node->pub_left_debay_, left_rect_debay, sensor_msgs::image_encodings::BGR8);
-            publishImage(node->pub_right_debay_, right_rect_debay, sensor_msgs::image_encodings::BGR8);
+            publishCompressedImage(node->pub_left_rect_, left_rect);
+            publishCompressedImage(node->pub_right_rect_, right_rect);
         }
         node->pub_disparity_->publish(*disparity_msg);
         last_publish_time = current_time;
     }
 }
 
-void publishImage(const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& publisher, const cv::Mat& image, const std::string& encoding)
+void publishCompressedImage(const rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr& publisher, const cv::Mat& image)
 {
-    auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), encoding, image).toImageMsg();
-    publisher->publish(*msg);
+    sensor_msgs::msg::CompressedImage compressed_msg;
+    compressed_msg.header.stamp = rclcpp::Clock().now();
+    compressed_msg.format = "jpeg";
+    cv::imencode(".jpg", image, compressed_msg.data);
+    publisher->publish(compressed_msg);
 }
 
 void publishPerformanceMetrics(

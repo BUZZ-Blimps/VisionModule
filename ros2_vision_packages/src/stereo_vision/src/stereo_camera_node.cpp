@@ -4,6 +4,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include "publishers.hpp"
 #include "yolo_inference.hpp"
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 
 StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
 {
@@ -100,12 +102,8 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
 
     // Create publishers with default QoS
     if (publish_intermediate_) {
-        pub_left_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_raw", qos);
-        pub_right_raw_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_raw", qos);
-        pub_left_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_rect", qos);
-        pub_right_rect_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_rect", qos);
-        pub_left_debay_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/left_debay", qos);
-        pub_right_debay_ = this->create_publisher<sensor_msgs::msg::Image>(node_namespace_ + "/right_debay", qos);
+        pub_left_rect_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(node_namespace_ + "/left_rect/compressed", qos);
+        pub_right_rect_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(node_namespace_ + "/right_rect/compressed", qos);
     }
 
     // Use default QoS for disparity publisher
@@ -209,7 +207,7 @@ void StereoCameraNode::processingLoop()
         auto end_time = std::chrono::high_resolution_clock::now();
 
         // Publish results
-        publishImages(this, left_raw_, right_raw_, left_rect_, right_rect_, left_debay_, right_debay_, disparity_msg);
+        publishImages(this, left_rect_, right_rect_, disparity_msg);
         publishDetections(this, detections);
         publishPerformanceMetrics(this, split_start, split_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
     }

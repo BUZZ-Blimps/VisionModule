@@ -7,6 +7,7 @@
 #include "yolo_inference.hpp"
 
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <stereo_msgs/msg/disparity_image.hpp>
 #include "stereo_vision_msgs/msg/performance_metrics.hpp"
 #include "stereo_vision_msgs/msg/detection.hpp"
@@ -25,9 +26,7 @@ public:
     cv::Mat P_left_;
     cv::Mat P_right_;
     cv::Ptr<cv::StereoBM> stereo_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_raw_, pub_right_raw_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_rect_, pub_right_rect_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_debay_, pub_right_debay_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_left_rect_, pub_right_rect_;
     rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr pub_disparity_;
     rclcpp::Publisher<stereo_vision_msgs::msg::PerformanceMetrics>::SharedPtr pub_performance_;
     rclcpp::Publisher<stereo_vision_msgs::msg::DetectionArray>::SharedPtr pub_detections_;
