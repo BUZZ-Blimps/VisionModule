@@ -37,7 +37,7 @@ This package provides stereo vision functionality using ROS 2 and OpenCV.
 
 2. Launch the stereo vision node:
    ```
-   ros2 launch stereo_vision stereo_vision
+   ros2 launch stereo_vision stereo_vision.launch.py
    ```
 
 ## Configuration
