@@ -4,6 +4,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include "publishers.hpp"
 #include "yolo_inference.hpp"
+#include <opencv2/imgproc.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 
@@ -98,7 +99,14 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     std::cout << "Disparity maps generated." << std::endl;
 
     // Use default QoS for image topics
-    const auto qos = rclcpp::QoS(10);  // Keep last 10 messages
+    const auto qos = rclcpp::QoS(rclcpp::KeepLast(2))
+    .reliability(rclcpp::ReliabilityPolicy::Reliable)
+    .durability(rclcpp::DurabilityPolicy::Volatile)
+    .history(rclcpp::HistoryPolicy::KeepLast)
+    .deadline(std::chrono::milliseconds(100))
+    .lifespan(rclcpp::Duration(1, 0))  // 1 second
+    .liveliness(rclcpp::LivelinessPolicy::Automatic)
+    .avoid_ros_namespace_conventions(false);
 
     // Create publishers with default QoS
     if (publish_intermediate_) {
@@ -131,6 +139,9 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
 
     // Initialize the processing thread
     processing_thread_ = std::thread(&StereoCameraNode::processingLoop, this);
+
+    // In the constructor
+    clahe_ = cv::createCLAHE(2.0, cv::Size(8, 8));
 }
 
 StereoCameraNode::~StereoCameraNode()
@@ -156,10 +167,8 @@ void StereoCameraNode::timerCallback()
     latest_frame_ = frame;
 }
 
-void StereoCameraNode::processingLoop()
-{
-    while (rclcpp::ok() && !stop_processing_)
-    {
+void StereoCameraNode::processingLoop() {
+    while (rclcpp::ok() && !stop_processing_) {
         cv::Mat frame;
         {
             std::lock_guard<std::mutex> lock(frame_mutex_);
@@ -170,31 +179,46 @@ void StereoCameraNode::processingLoop()
         }
 
         auto start_time = std::chrono::high_resolution_clock::now();
-
         auto split_start = std::chrono::high_resolution_clock::now();
+
         cv::Rect left_roi(0, 0, frame.cols / 2, frame.rows);
         cv::Rect right_roi(frame.cols / 2, 0, frame.cols / 2, frame.rows);
         left_raw_ = frame(left_roi);
         right_raw_ = frame(right_roi);
+
         auto split_end = std::chrono::high_resolution_clock::now();
 
-        cv::resize(left_rect_, yolo_input_, cv::Size(640,640), cv::INTER_LINEAR);
-        yolo_future_ = std::async(std::launch::async, performYOLOInference, std::ref(yolo_input_), std::ref(rknn_app_ctx), box_conf_threshold, nms_threshold, this->get_logger());
+        cv::Mat resized_image, padded_image;
+        cv::resize(left_rect_, resized_image, cv::Size(640, 480), cv::INTER_LINEAR);
+
+        int top = 0;
+        int bottom = 640 - 480;  // The amount of padding needed at the bottom
+        int left = 0;
+        int right = 0;
+
+        cv::copyMakeBorder(resized_image, padded_image, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+        yolo_future_ = std::async(std::launch::async, performYOLOInference, std::ref(padded_image), std::ref(rknn_app_ctx), box_conf_threshold, nms_threshold, this->get_logger());
 
         auto rectify_start = std::chrono::high_resolution_clock::now();
+
         cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
-        cv::resize(left_rect_, left_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+        cv::resize(left_rect_, left_rect_, cv::Size(640,480), cv::INTER_LINEAR);
         cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
 
         cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
-        cv::resize(right_rect_, right_rect_, cv::Size(640,640), cv::INTER_LINEAR);
+        cv::resize(right_rect_, right_rect_, cv::Size(640,480), cv::INTER_LINEAR);
         cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
-        
+
         auto rectify_end = std::chrono::high_resolution_clock::now();
+
+        // Apply CLAHE to left and right images
+        cv::Mat left_clahe, right_clahe;
+        clahe_->apply(left_debay_, left_clahe);
+        clahe_->apply(right_debay_, right_clahe);
 
         // Compute disparity map
         auto disparity_start = std::chrono::high_resolution_clock::now();
-        stereo_->compute(left_debay_, right_debay_, disparity_);
+        stereo_->compute(left_clahe, right_clahe, disparity_);
         auto disparity_msg = convertToDisparityImageMsg(disparity_, this);
         auto disparity_end = std::chrono::high_resolution_clock::now();
 
@@ -204,7 +228,11 @@ void StereoCameraNode::processingLoop()
         auto yolo_end = std::chrono::high_resolution_clock::now();
 
         estimateDepth(detections, *disparity_msg);
+
         auto end_time = std::chrono::high_resolution_clock::now();
+
+        cv::resize(left_rect_, left_rect_, cv::Size(320,240), cv::INTER_LINEAR);
+        cv::resize(right_rect_, right_rect_, cv::Size(320,240), cv::INTER_LINEAR);
 
         // Publish results
         publishImages(this, left_rect_, right_rect_, disparity_msg);

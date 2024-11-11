@@ -113,6 +113,10 @@ std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::M
 
     post_process(&app_ctx, outputs, box_conf_threshold, nms_threshold, &od_results);
 
+    // Define minimum confidence and area thresholds
+    const float MIN_CONFIDENCE = 0.6f;  // Adjust this value as needed
+    const int MIN_AREA = 200;  // Adjust this value as needed (e.g., 50x20 pixels)
+
     for (int i = 0; i < od_results.count; i++) {
         object_detect_result* det_result = &(od_results.results[i]);
 
@@ -123,14 +127,20 @@ std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::M
         int cls = det_result->cls_id;
         float prob = det_result->prop;
 
-        stereo_vision_msgs::msg::Detection detection;
-        detection.class_id = cls;
-        detection.bbox[0] = x1;
-        detection.bbox[1] = y1;
-        detection.bbox[2] = x2 - x1;
-        detection.bbox[3] = y2 - y1;
-        detection.confidence = prob;
-        detections.push_back(detection);
+        // Calculate bounding box area
+        int area = (x2 - x1) * (y2 - y1);
+
+        // Filter based on confidence and area
+        if (prob >= MIN_CONFIDENCE && area >= MIN_AREA && cls != 2 && cls != 3) {
+            stereo_vision_msgs::msg::Detection detection;
+            detection.class_id = cls;
+            detection.bbox[0] = x1;
+            detection.bbox[1] = y1;
+            detection.bbox[2] = x2 - x1;
+            detection.bbox[3] = y2 - y1;
+            detection.confidence = prob;
+            detections.push_back(detection);
+        }
     }
 
     rknn_outputs_release(app_ctx.rknn_ctx, app_ctx.io_num.n_output, outputs);

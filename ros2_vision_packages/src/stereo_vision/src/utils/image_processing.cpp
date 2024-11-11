@@ -97,7 +97,7 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
             std::sort(valid_disparities.begin(), valid_disparities.end());
             float median = valid_disparities[valid_disparities.size() / 2];
             median = median * 2;
-            depth = (disparity_msg.f * disparity_msg.t) / median;
+            depth = (disparity_msg.f * disparity_msg.t) / (2*median);
             //std::cout << "Rao's Depth: " << detection.depth << " New Depth: " << depth << std::endl;
             if (median == 0) {
               detection.depth = mono_depth;  

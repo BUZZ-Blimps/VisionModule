@@ -42,6 +42,7 @@ private:
     cv::Mat map1_left_, map2_left_, map1_right_, map2_right_;
     cv::Mat Q_;
     cv::Size image_size_;
+    cv::Ptr<cv::CLAHE> clahe_;
 
     // Preallocated matrices
     cv::Mat frame_;
