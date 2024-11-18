@@ -14,9 +14,10 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     this->declare_parameter("camera_index", 0);
     this->declare_parameter("calibration_file", "");
     this->declare_parameter("publish_intermediate", true);
+    this->declare_parameter("save_frames", false);
     this->declare_parameter("node_namespace", "BurnCreamBlimp");
     this->declare_parameter("camera_number", 1);
-    this->declare_parameter("model_path", "yolov5.rknn");
+    this->declare_parameter("model_path", "yolov10n_i8.rknn");
 
     // Disparity map parameters
     this->declare_parameter("min_disparity", 0);
@@ -31,6 +32,7 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     camera_index_ = this->get_parameter("camera_index").as_int();
     calibration_file_ = this->get_parameter("calibration_file").as_string();
     publish_intermediate_ = this->get_parameter("publish_intermediate").as_bool();
+    frame_save_ = this->get_parameter("save_frames").as_bool();
     node_namespace_ = this->get_parameter("node_namespace").as_string();
     camera_number_ = this->get_parameter("camera_number").as_int();
     model_path_ = this->get_parameter("model_path").as_string();
@@ -112,6 +114,12 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     if (publish_intermediate_) {
         pub_left_rect_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(node_namespace_ + "/left_rect/compressed", qos);
         pub_right_rect_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(node_namespace_ + "/right_rect/compressed", qos);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Value of frame saver: %d", frame_save_);
+    if (frame_save_) {
+        saver.initVideoSaver(15, true);
+        
     }
 
     // Use default QoS for disparity publisher
@@ -238,5 +246,9 @@ void StereoCameraNode::processingLoop() {
         publishImages(this, left_rect_, right_rect_, disparity_msg);
         publishDetections(this, detections);
         publishPerformanceMetrics(this, split_start, split_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
+
+        if (frame_save_) {
+            saver.writeFrame(padded_image);
+        }
     }
 }

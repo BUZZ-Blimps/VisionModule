@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 #include "image_processing.hpp"
 #include "yolo_inference.hpp"
+#include "VideoSaver.h"
 
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
@@ -22,7 +23,7 @@ public:
     StereoCameraNode();
     ~StereoCameraNode();
 
-    bool publish_intermediate_;
+    bool publish_intermediate_, frame_save_;
     cv::Mat P_left_;
     cv::Mat P_right_;
     cv::Ptr<cv::StereoBM> stereo_;
@@ -31,6 +32,8 @@ public:
     rclcpp::Publisher<stereo_vision_msgs::msg::PerformanceMetrics>::SharedPtr pub_performance_;
     rclcpp::Publisher<stereo_vision_msgs::msg::DetectionArray>::SharedPtr pub_detections_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_targets_;
+
+    VideoSaver saver;
 
 private:
     void timerCallback();
