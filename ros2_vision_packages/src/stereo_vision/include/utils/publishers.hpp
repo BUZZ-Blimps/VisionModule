@@ -9,15 +9,13 @@
 
 enum class TargetClass {
     GreenBalloon = 0,
-    PurpleBalloon = 1,
-    BlueBlimp = 2,
-    RedBlimp = 3,
-    RedCircle = 4,
-    RedSquare = 5,
-    RedTriangle = 6,
-    YellowCircle = 7,
-    YellowSquare = 8,
-    YellowTriangle = 9
+    PurpleBalloon = 4,
+    RedCircle = 1,
+    RedSquare = 2,
+    RedTriangle = 3,
+    YellowCircle = 5,
+    YellowSquare = 6,
+    YellowTriangle = 7
 };
 
 void publishImages(const StereoCameraNode* node, const cv::Mat& left_rect, const cv::Mat& right_rect, const stereo_msgs::msg::DisparityImage::SharedPtr& disparity_msg);
