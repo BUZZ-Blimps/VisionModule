@@ -11,6 +11,7 @@ class StereoCameraNode;
 
 void updateDisparityMapParams(cv::Ptr<cv::StereoBM>& stereo, const rclcpp::Node* node);
 void loadROSCalibration(const std::string& filename, cv::Mat& camera_matrix, cv::Mat& dist_coeffs, cv::Mat& R, cv::Mat& P);
+std::vector<float> removeOutliers(std::vector<float>& disparities, float eps, int minPts);
 double monoDepthEstimator(double bbox_area);
 void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, const stereo_msgs::msg::DisparityImage& disparity_msg);
 stereo_msgs::msg::DisparityImage::SharedPtr convertToDisparityImageMsg(const cv::Mat& disparity, const StereoCameraNode* node);

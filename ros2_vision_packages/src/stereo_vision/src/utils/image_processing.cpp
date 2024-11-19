@@ -1,5 +1,8 @@
 #include "image_processing.hpp"
 #include <sensor_msgs/image_encodings.hpp>
+#include <vector>
+#include <algorithm>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <yaml-cpp/yaml.h>
@@ -49,6 +52,49 @@ void loadROSCalibration(const std::string& filename, cv::Mat& K, cv::Mat& D, cv:
     }
 }
 
+std::vector<float> removeOutliers(std::vector<float>& disparities, float eps, int minPts) {
+    std::vector<bool> visited(disparities.size(), false);
+    std::vector<bool> noise(disparities.size(), false);
+    std::vector<float> filtered_disparities;
+
+    for (size_t i = 0; i < disparities.size(); ++i) {
+        if (visited[i]) continue;
+        
+        visited[i] = true;
+        std::vector<size_t> neighbors;
+        
+        for (size_t j = 0; j < disparities.size(); ++j) {
+            if (std::abs(disparities[i] - disparities[j]) < eps) {
+                neighbors.push_back(j);
+            }
+        }
+        
+        if (neighbors.size() < minPts) {
+            noise[i] = true;
+        } else {
+            for (size_t j : neighbors) {
+                if (!visited[j]) {
+                    visited[j] = true;
+                    for (size_t k = 0; k < disparities.size(); ++k) {
+                        if (std::abs(disparities[j] - disparities[k]) < eps) {
+                            neighbors.push_back(k);
+                        }
+                    }
+                }
+                if (noise[j]) noise[j] = false;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < disparities.size(); ++i) {
+        if (!noise[i]) {
+            filtered_disparities.push_back(disparities[i]);
+        }
+    }
+
+    return filtered_disparities;
+}
+
 double monoDepthEstimator(double bbox_area)
 {
     // Model coefficients
@@ -71,47 +117,84 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
     }
 
     for (auto& detection : detections) {
+        try {
+            double bbox_area = detection.bbox[2] * detection.bbox[3];
+            double mono_depth = monoDepthEstimator(bbox_area);
 
-        //mono depth
-        double bbox_area = detection.bbox[2] * detection.bbox[3]; // width * height
-        double mono_depth = monoDepthEstimator(bbox_area);
+            std::vector<float> valid_disparities;
+            int x1 = detection.bbox[0];
+            int y1 = detection.bbox[1];
+            int width = detection.bbox[2];
+            int height = detection.bbox[3];
+            int center_x = x1 + width / 2;
+            int center_y = y1 + height / 2;
 
-        //disparity depth
-        std::vector<float> valid_disparities;
-        int x1 = detection.bbox[0];
-        int y1 = detection.bbox[1];
-        int width = detection.bbox[2];
-        int height = detection.bbox[3];
-        int center_x = x1 + width / 2;
-        int center_y = y1 + height / 2;
-        for (int i = x1; i <= x1 + width - 1; i++) {
-            for (int j = y1; j <= y1 + height - 1; j++) {
-                double disparity_value = cv_ptr->image.at<float>(i, j);
-                if (!std::isnan(disparity_value) && disparity_value > 0) {
-                    valid_disparities.push_back(disparity_value);
+            // Remove center square
+            int square_size = std::min(width, height) / 2;
+            int square_x1 = center_x - square_size / 2;
+            int square_y1 = center_y - square_size / 2;
+
+            for (int i = 0; i < width; i++) {
+                for (int j = 0; j < height; j++) {
+                    int global_x = x1 + i;
+                    int global_y = y1 + j;
+                    
+                    // Skip center square
+                    if (global_x >= square_x1 && global_x < square_x1 + square_size &&
+                        global_y >= square_y1 && global_y < square_y1 + square_size) {
+                        continue;
+                    }
+                    
+                    double disparity_value = cv_ptr->image.at<float>(global_y, global_x);
+                    
+                    if (!std::isnan(disparity_value) && disparity_value > 0) {
+                        valid_disparities.push_back(disparity_value);
+                    }
                 }
             }
-        }
-        float depth;
-        if (!valid_disparities.empty()) {
-            std::sort(valid_disparities.begin(), valid_disparities.end());
-            float median = valid_disparities[valid_disparities.size() / 2];
-            median = median * 2;
-            depth = (disparity_msg.f * disparity_msg.t) / (2*median);
-            //std::cout << "Rao's Depth: " << detection.depth << " New Depth: " << depth << std::endl;
-            if (median == 0) {
-              detection.depth = mono_depth;  
-            } else if (mono_depth > depth) {
-                detection.depth = depth;
+
+            float depth;
+            if (!valid_disparities.empty()) {
+                std::sort(valid_disparities.begin(), valid_disparities.end());
+                float median = valid_disparities[valid_disparities.size() / 2];
+                depth = (disparity_msg.f * disparity_msg.t) / (2*median);
+
+                if (median == 0) {
+                    detection.depth = mono_depth;  
+                } else if ((depth < mono_depth) || ((detection.class_id != 0) && (detection.class_id != 4))) {
+                    detection.depth = depth;
+                } else {
+                    detection.depth = mono_depth;
+                }
+
+                if ((detection.depth > 100.0) || std::isnan(detection.depth)) {
+                    detection.depth = 100.0;
+                }
             } else {
                 detection.depth = mono_depth;
             }
+
+            // Print both depths for testing purposes
+            std::cout << "Detection: " << detection.class_id 
+                    << ", Mono depth: " << mono_depth 
+                    << ", Disparity depth: " << depth 
+                    << ", Selected depth: " << detection.depth << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "Error in depth estimation: " << e.what() << std::endl;
+            std::cerr << "Detection details:" << std::endl;
+            std::cerr << "  Class ID: " << detection.class_id << std::endl;
+            std::cerr << "  Bounding box: [" << detection.bbox[0] << ", " << detection.bbox[1] 
+                    << ", " << detection.bbox[2] << ", " << detection.bbox[3] << "]" << std::endl;
+            std::cerr << "  Image dimensions: " << cv_ptr->image.cols << "x" << cv_ptr->image.rows << std::endl;
+        } catch (...) {
+            std::cerr << "Unknown error occurred in depth estimation" << std::endl;
+            std::cerr << "Detection details:" << std::endl;
+            std::cerr << "  Class ID: " << detection.class_id << std::endl;
+            std::cerr << "  Bounding box: [" << detection.bbox[0] << ", " << detection.bbox[1] 
+                    << ", " << detection.bbox[2] << ", " << detection.bbox[3] << "]" << std::endl;
+            std::cerr << "  Image dimensions: " << cv_ptr->image.cols << "x" << cv_ptr->image.rows << std::endl;
         }
-        // Print both depths for testing purposes
-        std::cout << "Detection: " << detection.class_id 
-                << ", Mono depth: " << mono_depth 
-                << ", Disparity depth: " << depth 
-                << ", Selected depth: " << detection.depth << std::endl;
     }
 }
 
