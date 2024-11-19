@@ -111,10 +111,10 @@ void publishDetections(const StereoCameraNode* node, const std::vector<stereo_vi
     }
     
     auto populate_target = [](const stereo_vision_msgs::msg::Detection& detection, std::vector<double>& data, int offset) {
-        if (detection.class_id == -1) {
-            data[offset] = 1000.0;
-            data[offset + 1] = 1000.0;
-            data[offset + 2] = 1000.0;
+        if (detection.class_id == 0.0 && detection.confidence == 0.0) {
+            data[offset] = -1.0;
+            data[offset + 1] = -1.0;
+            data[offset + 2] = -1.0;
         } else {
             data[offset] = detection.bbox[0] + detection.bbox[2] / 2.0;  // center x
             data[offset + 1] = detection.bbox[1] + detection.bbox[3] / 2.0;  // center y
