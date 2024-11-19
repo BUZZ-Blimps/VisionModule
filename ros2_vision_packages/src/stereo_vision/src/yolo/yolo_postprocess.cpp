@@ -297,6 +297,7 @@ static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
             int offset = i* grid_w + j;
             int max_class_id = -1;
 
+            // 通过 score sum 起到快速过滤的作用
             if (score_sum_tensor != nullptr){
                 if (score_sum_tensor[offset] < score_sum_thres_i8){
                     continue;
@@ -304,38 +305,41 @@ static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
             }
 
             int8_t max_score = -score_zp;
-            for (int c= 0; c< OBJ_CLASS_NUM; c++)
-            {
-                int score_offset = i* grid_w + j + c*grid_len;
-                if (score_tensor[score_offset] > score_thres_i8)
+            for (int c= 0; c< OBJ_CLASS_NUM; c++){
+                if ((score_tensor[offset] > score_thres_i8) && (score_tensor[offset] > max_score))
                 {
-                    max_score = score_tensor[score_offset];
+                    max_score = score_tensor[offset];
                     max_class_id = c;
-                    float box[4];
-                    float before_dfl[dfl_len*4];
-                    for (int k=0; k< dfl_len*4; k++){
-                        if (offset > 102400) offset=102399;
-                        before_dfl[k] = deqnt_affine_to_f32(box_tensor[offset], box_zp, box_scale);
-                        offset += grid_len;
-                    }
-                    compute_dfl(before_dfl, dfl_len, box);
-
-                    float x1,y1,x2,y2,w,h;
-                    x1 = (-box[0] + j + 0.5)*stride;
-                    y1 = (-box[1] + i + 0.5)*stride;
-                    x2 = (box[2] + j + 0.5)*stride;
-                    y2 = (box[3] + i + 0.5)*stride;
-                    w = x2 - x1;
-                    h = y2 - y1;
-                    boxes.push_back(x1);
-                    boxes.push_back(y1);
-                    boxes.push_back(w);
-                    boxes.push_back(h);
-
-                    objProbs.push_back(deqnt_affine_to_f32(max_score, score_zp, score_scale));
-                    classId.push_back(max_class_id);
-                    validCount ++;
                 }
+                offset += grid_len;
+            }
+
+            // compute box
+            if (max_score> score_thres_i8){
+                offset = i* grid_w + j;
+                float box[4];
+                float before_dfl[dfl_len*4];
+                for (int k=0; k< dfl_len*4; k++){
+                    before_dfl[k] = deqnt_affine_to_f32(box_tensor[offset], box_zp, box_scale);
+                    offset += grid_len;
+                }
+                compute_dfl(before_dfl, dfl_len, box);
+
+                float x1,y1,x2,y2,w,h;
+                x1 = (-box[0] + j + 0.5)*stride;
+                y1 = (-box[1] + i + 0.5)*stride;
+                x2 = (box[2] + j + 0.5)*stride;
+                y2 = (box[3] + i + 0.5)*stride;
+                w = x2 - x1;
+                h = y2 - y1;
+                boxes.push_back(x1);
+                boxes.push_back(y1);
+                boxes.push_back(w);
+                boxes.push_back(h);
+
+                objProbs.push_back(deqnt_affine_to_f32(max_score, score_zp, score_scale));
+                classId.push_back(max_class_id);
+                validCount ++;
             }
         }
     }

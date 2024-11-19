@@ -187,13 +187,6 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
             std::cerr << "  Bounding box: [" << detection.bbox[0] << ", " << detection.bbox[1] 
                     << ", " << detection.bbox[2] << ", " << detection.bbox[3] << "]" << std::endl;
             std::cerr << "  Image dimensions: " << cv_ptr->image.cols << "x" << cv_ptr->image.rows << std::endl;
-        } catch (...) {
-            std::cerr << "Unknown error occurred in depth estimation" << std::endl;
-            std::cerr << "Detection details:" << std::endl;
-            std::cerr << "  Class ID: " << detection.class_id << std::endl;
-            std::cerr << "  Bounding box: [" << detection.bbox[0] << ", " << detection.bbox[1] 
-                    << ", " << detection.bbox[2] << ", " << detection.bbox[3] << "]" << std::endl;
-            std::cerr << "  Image dimensions: " << cv_ptr->image.cols << "x" << cv_ptr->image.rows << std::endl;
         }
     }
 }
@@ -201,7 +194,6 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
 stereo_msgs::msg::DisparityImage::SharedPtr convertToDisparityImageMsg(const cv::Mat& disparity, const StereoCameraNode* node)
 {
     auto disparity_msg = std::make_unique<stereo_msgs::msg::DisparityImage>();
-    disparity_msg->header.stamp = node->now();
     disparity_msg->header.frame_id = "stereo_camera";
 
     // Convert disparity to float

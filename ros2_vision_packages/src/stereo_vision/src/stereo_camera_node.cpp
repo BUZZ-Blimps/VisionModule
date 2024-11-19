@@ -16,8 +16,8 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     this->declare_parameter("publish_intermediate", true);
     this->declare_parameter("save_frames", false);
     this->declare_parameter("node_namespace", "BurnCreamBlimp");
-    this->declare_parameter("camera_number", 1);
-    this->declare_parameter("model_path", "yolov10n_i8.rknn");
+    this->declare_parameter("camera_number", 4);
+    this->declare_parameter("model_path", "yolov10n_v2.rknn");
 
     // Disparity map parameters
     this->declare_parameter("min_disparity", 0);
@@ -176,79 +176,99 @@ void StereoCameraNode::timerCallback()
 }
 
 void StereoCameraNode::processingLoop() {
+    RCLCPP_INFO(this->get_logger(), "Starting processing loop");
     while (rclcpp::ok() && !stop_processing_) {
-        cv::Mat frame;
-        {
-            std::lock_guard<std::mutex> lock(frame_mutex_);
-            if (latest_frame_.empty()) {
-                continue;
+        try {
+            cv::Mat frame;
+            {
+                std::lock_guard<std::mutex> lock(frame_mutex_);
+                if (latest_frame_.empty()) {
+                    RCLCPP_DEBUG(this->get_logger(), "No new frame available, continuing to next iteration");
+                    continue;
+                }
+                frame = latest_frame_.clone();
             }
-            frame = latest_frame_.clone();
-        }
 
-        auto start_time = std::chrono::high_resolution_clock::now();
-        auto split_start = std::chrono::high_resolution_clock::now();
+            RCLCPP_DEBUG(this->get_logger(), "Processing new frame");
+            auto start_time = std::chrono::high_resolution_clock::now();
+            auto split_start = std::chrono::high_resolution_clock::now();
 
-        cv::Rect left_roi(0, 0, frame.cols / 2, frame.rows);
-        cv::Rect right_roi(frame.cols / 2, 0, frame.cols / 2, frame.rows);
-        left_raw_ = frame(left_roi);
-        right_raw_ = frame(right_roi);
+            cv::Rect left_roi(0, 0, frame.cols / 2, frame.rows);
+            cv::Rect right_roi(frame.cols / 2, 0, frame.cols / 2, frame.rows);
+            left_raw_ = frame(left_roi);
+            right_raw_ = frame(right_roi);
 
-        auto split_end = std::chrono::high_resolution_clock::now();
+            auto split_end = std::chrono::high_resolution_clock::now();
+            RCLCPP_DEBUG(this->get_logger(), "Frame split completed");
 
-        cv::Mat resized_image, padded_image;
-        cv::resize(left_rect_, resized_image, cv::Size(640, 480), cv::INTER_LINEAR);
+            cv::Mat resized_image, padded_image;
+            cv::resize(left_rect_, resized_image, cv::Size(640, 480), cv::INTER_LINEAR);
 
-        int top = 0;
-        int bottom = 640 - 480;  // The amount of padding needed at the bottom
-        int left = 0;
-        int right = 0;
+            int top = 0;
+            int bottom = 640 - 480;
+            int left = 0;
+            int right = 0;
 
-        cv::copyMakeBorder(resized_image, padded_image, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
-        yolo_future_ = std::async(std::launch::async, performYOLOInference, std::ref(padded_image), std::ref(rknn_app_ctx), box_conf_threshold, nms_threshold, this->get_logger());
+            cv::copyMakeBorder(resized_image, padded_image, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+            RCLCPP_DEBUG(this->get_logger(), "Starting YOLO inference asynchronously");
+            yolo_future_ = std::async(std::launch::async, performYOLOInference, std::ref(padded_image), std::ref(rknn_app_ctx), box_conf_threshold, nms_threshold, this->get_logger());
 
-        auto rectify_start = std::chrono::high_resolution_clock::now();
+            auto rectify_start = std::chrono::high_resolution_clock::now();
 
-        cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
-        cv::resize(left_rect_, left_rect_, cv::Size(640,480), cv::INTER_LINEAR);
-        cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
+            RCLCPP_DEBUG(this->get_logger(), "Starting image rectification");
+            cv::remap(left_raw_, left_rect_, map1_left_, map2_left_, cv::INTER_NEAREST);
+            cv::resize(left_rect_, left_rect_, cv::Size(640,480), cv::INTER_LINEAR);
+            cv::cvtColor(left_rect_, left_debay_, cv::COLOR_BGR2GRAY);
 
-        cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
-        cv::resize(right_rect_, right_rect_, cv::Size(640,480), cv::INTER_LINEAR);
-        cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
+            cv::remap(right_raw_, right_rect_, map1_right_, map2_right_, cv::INTER_NEAREST);
+            cv::resize(right_rect_, right_rect_, cv::Size(640,480), cv::INTER_LINEAR);
+            cv::cvtColor(right_rect_, right_debay_, cv::COLOR_BGR2GRAY);
 
-        auto rectify_end = std::chrono::high_resolution_clock::now();
+            auto rectify_end = std::chrono::high_resolution_clock::now();
+            RCLCPP_DEBUG(this->get_logger(), "Image rectification completed");
 
-        // Apply CLAHE to left and right images
-        cv::Mat left_clahe, right_clahe;
-        clahe_->apply(left_debay_, left_clahe);
-        clahe_->apply(right_debay_, right_clahe);
+            RCLCPP_DEBUG(this->get_logger(), "Applying CLAHE");
+            cv::Mat left_clahe, right_clahe;
+            clahe_->apply(left_debay_, left_clahe);
+            clahe_->apply(right_debay_, right_clahe);
 
-        // Compute disparity map
-        auto disparity_start = std::chrono::high_resolution_clock::now();
-        stereo_->compute(left_clahe, right_clahe, disparity_);
-        auto disparity_msg = convertToDisparityImageMsg(disparity_, this);
-        auto disparity_end = std::chrono::high_resolution_clock::now();
+            RCLCPP_DEBUG(this->get_logger(), "Computing disparity map");
+            auto disparity_start = std::chrono::high_resolution_clock::now();
+            stereo_->compute(left_clahe, right_clahe, disparity_);
+            auto disparity_msg = convertToDisparityImageMsg(disparity_, this);
+            auto disparity_end = std::chrono::high_resolution_clock::now();
 
-        // Wait for YOLO inference to complete
-        auto yolo_start = std::chrono::high_resolution_clock::now();
-        auto detections = yolo_future_.get();
-        auto yolo_end = std::chrono::high_resolution_clock::now();
+            RCLCPP_DEBUG(this->get_logger(), "Waiting for YOLO inference to complete");
+            auto yolo_start = std::chrono::high_resolution_clock::now();
+            auto detections = yolo_future_.get();
+            auto yolo_end = std::chrono::high_resolution_clock::now();
 
-        estimateDepth(detections, *disparity_msg);
+            RCLCPP_DEBUG(this->get_logger(), "Estimating depth");
+            estimateDepth(detections, *disparity_msg);
 
-        auto end_time = std::chrono::high_resolution_clock::now();
+            auto end_time = std::chrono::high_resolution_clock::now();
 
-        cv::resize(left_rect_, left_rect_, cv::Size(320,240), cv::INTER_LINEAR);
-        cv::resize(right_rect_, right_rect_, cv::Size(320,240), cv::INTER_LINEAR);
+            cv::resize(left_rect_, left_rect_, cv::Size(320,240), cv::INTER_LINEAR);
+            cv::resize(right_rect_, right_rect_, cv::Size(320,240), cv::INTER_LINEAR);
 
-        // Publish results
-        publishImages(this, left_rect_, right_rect_, disparity_msg);
-        publishDetections(this, detections);
-        publishPerformanceMetrics(this, split_start, split_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
+            RCLCPP_DEBUG(this->get_logger(), "Publishing results");
+            publishImages(this, left_rect_, right_rect_, disparity_msg);
+            publishDetections(this, detections);
+            publishPerformanceMetrics(this, split_start, split_end, rectify_start, rectify_end, disparity_start, disparity_end, yolo_start, yolo_end, start_time, end_time);
 
-        if (frame_save_) {
-            saver.writeFrame(padded_image);
+            if (frame_save_) {
+                RCLCPP_DEBUG(this->get_logger(), "Saving frame");
+                saver.writeFrame(padded_image);
+            }
+
+            RCLCPP_DEBUG(this->get_logger(), "Frame processing completed");
+        } catch (const cv::Exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "OpenCV error occurred: %s", e.what());
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Error occurred: %s", e.what());
+        } catch (...) {
+            RCLCPP_ERROR(this->get_logger(), "Unknown error occurred");
         }
     }
+    RCLCPP_INFO(this->get_logger(), "Processing loop ended");
 }
