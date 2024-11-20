@@ -228,13 +228,13 @@ void StereoCameraNode::processingLoop() {
             RCLCPP_DEBUG(this->get_logger(), "Image rectification completed");
 
             RCLCPP_DEBUG(this->get_logger(), "Applying CLAHE");
-            cv::Mat left_clahe, right_clahe;
-            clahe_->apply(left_debay_, left_clahe);
-            clahe_->apply(right_debay_, right_clahe);
+            // cv::Mat left_clahe, right_clahe;
+            // clahe_->apply(left_debay_, left_clahe);
+            // clahe_->apply(right_debay_, right_clahe);
 
             RCLCPP_DEBUG(this->get_logger(), "Computing disparity map");
             auto disparity_start = std::chrono::high_resolution_clock::now();
-            stereo_->compute(left_clahe, right_clahe, disparity_);
+            stereo_->compute(left_debay_, right_debay_, disparity_);
             auto disparity_msg = convertToDisparityImageMsg(disparity_, this);
             auto disparity_end = std::chrono::high_resolution_clock::now();
 

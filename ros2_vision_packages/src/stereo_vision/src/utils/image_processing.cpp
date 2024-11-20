@@ -147,7 +147,7 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
                     
                     double disparity_value = cv_ptr->image.at<float>(global_y, global_x);
                     
-                    if (!std::isnan(disparity_value) && disparity_value > 0) {
+                    if (!std::isnan(disparity_value) && (disparity_value > 0.01) && (disparity_value < 100.0)) {
                         valid_disparities.push_back(disparity_value);
                     }
                 }
@@ -161,13 +161,15 @@ void estimateDepth(std::vector<stereo_vision_msgs::msg::Detection>& detections, 
 
                 if (median == 0) {
                     detection.depth = mono_depth;  
-                } else if ((depth < mono_depth) || ((detection.class_id != 0) && (detection.class_id != 4))) {
-                    detection.depth = depth;
                 } else {
-                    detection.depth = mono_depth;
+                    detection.depth = depth;
                 }
-
-                if ((detection.depth > 100.0) || std::isnan(detection.depth)) {
+                 
+                if ((mono_depth < depth) && ((detection.class_id == 0) ||(detection.class_id == 4))) {
+                    detection.depth = mono_depth;
+                } 
+                
+                if ((detection.depth > 100.0) || std::isnan(detection.depth) || (detection.depth < 0.01)) {
                     detection.depth = 100.0;
                 }
             } else {

@@ -112,9 +112,8 @@ std::vector<stereo_vision_msgs::msg::Detection> performYOLOInference(const cv::M
         post_process(&app_ctx, outputs, box_conf_threshold, nms_threshold, 1.0, 1.0, &od_results);
 
         // Define minimum confidence and area thresholds
-        const float MIN_CONFIDENCE = 0.6f;  // Adjust this value as needed
-        const int MIN_AREA = 100;  // Adjust this value as needed (e.g., 50x20 pixels)
-
+        const float MIN_CONFIDENCE = 0.56f;  // Adjust this value as needed
+        const int MIN_AREA = 50;  // Adjust this value as needed (e.g., 50x20 pixels)
         for (int i = 0; i < od_results.count; i++) {
             object_detect_result* det_result = &(od_results.results[i]);
 
