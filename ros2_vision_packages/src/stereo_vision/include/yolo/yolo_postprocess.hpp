@@ -11,13 +11,8 @@
 #define OBJ_CLASS_NUM 10
 #define NMS_THRESH 0.45
 #define BOX_THRESH 0.25
+#define PROP_BOX_SIZE (5 + OBJ_CLASS_NUM)
 
-// class rknn_app_context_t;
+int post_process(rknn_app_context_t *app_ctx, void *outputs, float conf_threshold, float nms_threshold, float scale_w, float scale_h, object_detect_result_list *od_results);
 
-int init_post_process();
-void deinit_post_process();
-char *coco_cls_to_name(int cls_id);
-int post_process(rknn_app_context_t *app_ctx, void *outputs, float conf_threshold, float nms_threshold, object_detect_result_list *od_results);
-
-void deinitPostProcess();
-#endif //_RKNN_POSTPROCESS_H_
+#endif

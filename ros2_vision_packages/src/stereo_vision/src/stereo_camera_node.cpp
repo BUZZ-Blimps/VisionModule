@@ -15,9 +15,9 @@ StereoCameraNode::StereoCameraNode() : Node("stereo_camera_node")
     this->declare_parameter("calibration_file", "");
     this->declare_parameter("publish_intermediate", true);
     this->declare_parameter("save_frames", false);
-    this->declare_parameter("node_namespace", "BurnCreamBlimp");
+    this->declare_parameter("node_namespace", "DevBoard");
     this->declare_parameter("camera_number", 4);
-    this->declare_parameter("model_path", "yolov10n_v2.rknn");
+    this->declare_parameter("model_path", "yolov11n_v1.rknn");
 
     // Disparity map parameters
     this->declare_parameter("min_disparity", 0);
