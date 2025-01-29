@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from std_msgs.msg import Bool, Float64MultiArray
 from sensor_msgs.msg import Image
-from stereo_vision_msgs.msg import PerformanceMetrics, DetectionArray
+from blimp_vision_msgs.msg import PerformanceMetrics, DetectionArray
 import yaml
 import time
 import os
@@ -61,8 +61,8 @@ class CameraNode(Node):
             return
 
         # Initialize camera properties and parameters
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  2560)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         # Initialize camera calibration for left and right cameras
@@ -73,6 +73,8 @@ class CameraNode(Node):
         self.right_distortion_coefficients = None
 
         self.load_calibration()
+
+        # FOR PERPLEXITY: INITIALIZE YOLO RKNN MODELS
 
         # Compute rectification maps
         self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
@@ -148,22 +150,29 @@ class CameraNode(Node):
         left_frame = frame[:, :frame_width]
         right_frame = frame[:, frame_width:]
 
+        # Resize frames to 640x480
+        left_frame = cv2.resize(left_frame, (640, 480))
+        right_frame = cv2.resize(right_frame, (640, 480))
+
         # Rectify images
         left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, 
                                  cv2.INTER_LINEAR)
         right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, 
                                   cv2.INTER_LINEAR)
 
-        # Convert to grayscale for disparity
-        left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
-        right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
+        # FOR PERPLEXITY: SEND IMAGES TO VISION MODEL
 
-        # Compute disparity map
-        disparity = self.stereo.compute(left_gray, right_gray)
+
+        # # Convert to grayscale for disparity
+        # left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
+        # right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
+
+        # # Compute disparity map
+        # disparity = self.stereo.compute(left_gray, right_gray)
         
-        # Normalize disparity for visualization
-        disparity_normalized = cv2.normalize(disparity, None, alpha=0, beta=255, 
-                                          norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        # # Normalize disparity for visualization
+        # disparity_normalized = cv2.normalize(disparity, None, alpha=0, beta=255, 
+        #                                   norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
         if self.vision_mode:
             # Process frame here
@@ -178,19 +187,19 @@ class CameraNode(Node):
             target_msg.data = [0.0, 0.0, 0.0]
             self.pub_targets.publish(target_msg)
 
-        if self.save_frames:
-            timestamp = self.get_clock().now().nanoseconds
-            cv2.imwrite(f"{self.save_location}/left_{timestamp}.jpg", left_rectified)
-            cv2.imwrite(f"{self.save_location}/right_{timestamp}.jpg", right_rectified)
-            cv2.imwrite(f"{self.save_location}/disparity_{timestamp}.jpg", disparity_normalized)
+        # if self.save_frames:
+        #     timestamp = self.get_clock().now().nanoseconds
+        #     cv2.imwrite(f"{self.save_location}/left_{timestamp}.jpg", left_rectified)
+        #     cv2.imwrite(f"{self.save_location}/right_{timestamp}.jpg", right_rectified)
+        #     cv2.imwrite(f"{self.save_location}/disparity_{timestamp}.jpg", disparity_normalized)
 
         # Calculate and store frame processing time
         process_time = (time.time() - start_time) * 1000  # Convert to milliseconds
         self.frame_times.append(process_time)
         self.frame_counter += 1
 
-        # Print performance metrics every 30 frames
-        if self.frame_counter % 30 == 0:
+        # Print performance metrics every 10 frames
+        if self.frame_counter % 10 == 0:
             avg_time = sum(self.frame_times) / len(self.frame_times)
             avg_fps = 1000 / avg_time
             self.get_logger().info(f'Average processing time: {avg_time:.2f}ms, FPS: {avg_fps:.2f}')
