@@ -1,13 +1,14 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'camera_number',
-            default_value='0',
+            default_value='4',
             description='Camera device number'
         ),
         DeclareLaunchArgument(
@@ -17,7 +18,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'calibration_path',
-            default_value='config/calibration.yaml',
+            default_value=PathJoinSubstitution([
+                get_package_share_directory('blimp_vision'),
+                'calibration'
+            ]),
             description='Path to camera calibration file'
         ),
         DeclareLaunchArgument(

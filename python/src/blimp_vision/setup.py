@@ -15,7 +15,7 @@ setup(
         # Add launch files
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         # Add config files if you have any
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'calibration'), glob('calibration/*.yaml')),
         # Add model files if you have any
         (os.path.join('share', package_name, 'models'), glob('models/*.rknn')),
     ],

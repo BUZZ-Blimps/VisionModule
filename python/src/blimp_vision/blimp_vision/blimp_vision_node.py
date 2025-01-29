@@ -8,6 +8,10 @@ import numpy as np
 from std_msgs.msg import Bool, Float64MultiArray
 from sensor_msgs.msg import Image
 from stereo_vision_msgs.msg import PerformanceMetrics, DetectionArray
+import yaml
+import time
+import os
+from collections import deque
 
 class CameraNode(Node):
     def __init__(self):
@@ -19,7 +23,7 @@ class CameraNode(Node):
             parameters=[
                 ('camera_number', 0),
                 ('device_path', '/dev/video1'),
-                ('calibration_path', 'config/calibration.yaml'),
+                ('calibration_path', 'calibration/'),
                 ('ball_model_file', 'models/ball.xml'),
                 ('goal_model_file', 'models/goal.xml'),
                 ('verbose_mode', False),
@@ -56,12 +60,73 @@ class CameraNode(Node):
             self.get_logger().error(f'Failed to open camera at {self.device_path}')
             return
 
+        # Initialize camera properties and parameters
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+
+        # Initialize camera calibration for left and right cameras
+        self.left_camera_matrix = None
+        self.left_distortion_coefficients = None
+
+        self.right_camera_matrix = None
+        self.right_distortion_coefficients = None
+
+        self.load_calibration()
+
+        # Compute rectification maps
+        self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
+            self.left_camera_matrix, self.left_distortion_coefficients, None, None, (640, 480), cv2.CV_32FC1)
+        self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
+            self.right_camera_matrix, self.right_distortion_coefficients, None, None, (640, 480), cv2.CV_32FC1)
+
+        self.frame_times = deque(maxlen=30)
+        self.frame_counter = 0
+        
+        # Initialize stereo matcher
+        self.stereo = cv2.StereoSGBM_create(
+            minDisparity=0,
+            numDisparities=128,
+            blockSize=5,
+            P1=8 * 3 * 5**2,
+            P2=32 * 3 * 5**2,
+            disp12MaxDiff=1,
+            uniquenessRatio=15,
+            speckleWindowSize=100,
+            speckleRange=32
+        )
+
         # Initialize other variables
         self.bridge = CvBridge()
         self.vision_mode = False
         
         # Create timer for camera capture
         self.timer = self.create_timer(0.033, self.camera_callback)  # 30 FPS
+
+    def load_calibration(self):
+        """Load camera calibration parameters for left and right cameras"""
+        try:
+            # Load left camera calibration
+            left_file = f'camera{self.camera_number}_elp_left.yaml'
+            with open(os.path.join(self.calibration_path, left_file), 'r') as file:
+                left_data = yaml.safe_load(file)
+                self.left_camera_matrix = np.array(left_data['camera_matrix']['data']).reshape(3,3)
+                self.left_dist_coeffs = np.array(left_data['distortion_coefficients']['data'])
+                self.left_rect_matrix = np.array(left_data['rectification_matrix']['data']).reshape(3,3)
+                self.left_proj_matrix = np.array(left_data['projection_matrix']['data']).reshape(3,4)
+
+            # Load right camera calibration
+            right_file = f'camera{self.camera_number}_elp_right.yaml'
+            with open(os.path.join(self.calibration_path, right_file), 'r') as file:
+                right_data = yaml.safe_load(file)
+                self.right_camera_matrix = np.array(right_data['camera_matrix']['data']).reshape(3,3)
+                self.right_dist_coeffs = np.array(right_data['distortion_coefficients']['data'])
+                self.right_rect_matrix = np.array(right_data['rectification_matrix']['data']).reshape(3,3)
+                self.right_proj_matrix = np.array(right_data['projection_matrix']['data']).reshape(3,4)
+
+            self.get_logger().info('Successfully loaded camera calibration files')
+        except Exception as e:
+            self.get_logger().error(f'Failed to load calibration files: {e}')
 
     def vision_mode_callback(self, msg):
         """Handle vision mode changes"""
@@ -71,33 +136,64 @@ class CameraNode(Node):
 
     def camera_callback(self):
         """Main camera processing loop"""
+        start_time = time.time()
+        
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warn('Failed to capture frame')
             return
 
+        # Split frame into left and right images
+        frame_width = frame.shape[1] // 2
+        left_frame = frame[:, :frame_width]
+        right_frame = frame[:, frame_width:]
+
+        # Rectify images
+        left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, 
+                                 cv2.INTER_LINEAR)
+        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, 
+                                  cv2.INTER_LINEAR)
+
+        # Convert to grayscale for disparity
+        left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
+        right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
+
+        # Compute disparity map
+        disparity = self.stereo.compute(left_gray, right_gray)
+        
+        # Normalize disparity for visualization
+        disparity_normalized = cv2.normalize(disparity, None, alpha=0, beta=255, 
+                                          norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
         if self.vision_mode:
             # Process frame here
-            # This is where you would add your computer vision processing
-            
-            # Example performance metrics
             perf_msg = PerformanceMetrics()
             perf_msg.fps = 30.0
             self.pub_performance.publish(perf_msg)
             
-            # Example detections
             det_msg = DetectionArray()
-            # Fill detection message
             self.pub_detections.publish(det_msg)
             
-            # Example targets
             target_msg = Float64MultiArray()
-            target_msg.data = [0.0, 0.0, 0.0]  # Example coordinates
+            target_msg.data = [0.0, 0.0, 0.0]
             self.pub_targets.publish(target_msg)
 
         if self.save_frames:
-            # Save frame to disk
-            cv2.imwrite(f"{self.save_location}/frame_{self.get_clock().now().nanoseconds}.jpg", frame)
+            timestamp = self.get_clock().now().nanoseconds
+            cv2.imwrite(f"{self.save_location}/left_{timestamp}.jpg", left_rectified)
+            cv2.imwrite(f"{self.save_location}/right_{timestamp}.jpg", right_rectified)
+            cv2.imwrite(f"{self.save_location}/disparity_{timestamp}.jpg", disparity_normalized)
+
+        # Calculate and store frame processing time
+        process_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        self.frame_times.append(process_time)
+        self.frame_counter += 1
+
+        # Print performance metrics every 30 frames
+        if self.frame_counter % 30 == 0:
+            avg_time = sum(self.frame_times) / len(self.frame_times)
+            avg_fps = 1000 / avg_time
+            self.get_logger().info(f'Average processing time: {avg_time:.2f}ms, FPS: {avg_fps:.2f}')
 
     def __del__(self):
         """Cleanup when node is destroyed"""
