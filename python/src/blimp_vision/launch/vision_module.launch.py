@@ -1,0 +1,64 @@
+from launch import LaunchDescription
+from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'camera_number',
+            default_value='0',
+            description='Camera device number'
+        ),
+        DeclareLaunchArgument(
+            'device_path',
+            default_value='/dev/video0',
+            description='Camera device path'
+        ),
+        DeclareLaunchArgument(
+            'calibration_path',
+            default_value='config/calibration.yaml',
+            description='Path to camera calibration file'
+        ),
+        DeclareLaunchArgument(
+            'ball_model_file',
+            default_value='models/ball.xml',
+            description='Path to ball detection model'
+        ),
+        DeclareLaunchArgument(
+            'goal_model_file',
+            default_value='models/goal.xml',
+            description='Path to goal detection model'
+        ),
+        DeclareLaunchArgument(
+            'verbose_mode',
+            default_value='false',
+            description='Enable verbose logging'
+        ),
+        DeclareLaunchArgument(
+            'save_frames',
+            default_value='false',
+            description='Enable frame saving'
+        ),
+        DeclareLaunchArgument(
+            'save_location',
+            default_value='frames/',
+            description='Location to save frames'
+        ),
+        Node(
+            package='blimp_vision',
+            executable='blimp_vision_node',
+            name='blimp_vision_node',
+            parameters=[{
+                'camera_number': LaunchConfiguration('camera_number'),
+                'device_path': LaunchConfiguration('device_path'),
+                'calibration_path': LaunchConfiguration('calibration_path'),
+                'ball_model_file': LaunchConfiguration('ball_model_file'),
+                'goal_model_file': LaunchConfiguration('goal_model_file'),
+                'verbose_mode': LaunchConfiguration('verbose_mode'),
+                'save_frames': LaunchConfiguration('save_frames'),
+                'save_location': LaunchConfiguration('save_location')
+            }],
+            output='screen'
+        )
+    ])
