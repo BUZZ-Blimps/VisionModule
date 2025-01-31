@@ -4,6 +4,14 @@ from glob import glob
 
 package_name = 'blimp_vision'
 
+# Function to get all files recursively from a directory
+def package_files(directory):
+    paths = []
+    for (path, directories, filenames) in os.walk(directory):
+        for filename in filenames:
+            paths.append(os.path.join('..', path, filename))
+    return paths
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -16,8 +24,12 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         # Add config files if you have any
         (os.path.join('share', package_name, 'calibration'), glob('calibration/*.yaml')),
-        # Add model files if you have any
-        (os.path.join('share', package_name, 'models'), glob('models/*.rknn')),
+        # Add model files with recursive directory structure
+        *[
+            (os.path.join('share', package_name, os.path.dirname(p)), [p])
+            for p in glob('models/**/*', recursive=True)
+            if os.path.isfile(p)
+        ],
     ],
     install_requires=['setuptools'],
     zip_safe=True,

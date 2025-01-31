@@ -9,9 +9,15 @@ from std_msgs.msg import Bool, Float64MultiArray
 from sensor_msgs.msg import Image
 from blimp_vision_msgs.msg import PerformanceMetrics, DetectionArray
 import yaml
-import time
 import os
 from collections import deque
+import time
+from rclpy.executors import MultiThreadedExecutor
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from rclpy.callback_groups import ReentrantCallbackGroup
+
+from ultralytics import YOLO
 
 class CameraNode(Node):
     def __init__(self):
@@ -74,7 +80,9 @@ class CameraNode(Node):
 
         self.load_calibration()
 
-        # FOR PERPLEXITY: INITIALIZE YOLO RKNN MODELS
+        # Initialize YOLO models
+        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect')
+        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect')
 
         # Compute rectification maps
         self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
@@ -86,24 +94,33 @@ class CameraNode(Node):
         self.frame_counter = 0
         
         # Initialize stereo matcher
-        self.stereo = cv2.StereoSGBM_create(
-            minDisparity=0,
-            numDisparities=128,
-            blockSize=5,
-            P1=8 * 3 * 5**2,
-            P2=32 * 3 * 5**2,
-            disp12MaxDiff=1,
-            uniquenessRatio=15,
-            speckleWindowSize=100,
-            speckleRange=32
+        self.stereo = cv2.StereoBM.create(
+            numDisparities=64,  # Reduced from 128 for speed
+            blockSize=9        # Smaller block size for faster computation
         )
+        
+        # Additional StereoBM parameters for better speed/quality trade-off
+        self.stereo.setPreFilterSize(5)
+        self.stereo.setPreFilterCap(61)
+        self.stereo.setMinDisparity(0)
+        self.stereo.setTextureThreshold(507)
+        self.stereo.setUniquenessRatio(0)
+        self.stereo.setSpeckleWindowSize(0)
+        self.stereo.setSpeckleRange(8)
+        self.stereo.setDisp12MaxDiff(1)
+
 
         # Initialize other variables
         self.bridge = CvBridge()
         self.vision_mode = False
-        
-        # Create timer for camera capture
-        self.timer = self.create_timer(0.033, self.camera_callback)  # 30 FPS
+        self.thread_pool = ThreadPoolExecutor(max_workers=2)
+
+        self.callback_group = ReentrantCallbackGroup()
+        self.timer = self.create_timer(
+            1/30.0,  # 30 FPS
+            self.camera_callback,
+            callback_group=self.callback_group
+        )
 
     def load_calibration(self):
         """Load camera calibration parameters for left and right cameras"""
@@ -136,85 +153,88 @@ class CameraNode(Node):
         if self.verbose_mode:
             self.get_logger().info(f'Vision mode changed to: {self.vision_mode}')
 
+    def run_model(self, left_square):
+        t_yolo = time.time()
+        if np.random.rand() > 0.5:
+            out = self.ball_rknn(left_square, verbose=False)
+        else:
+            out = self.goal_rknn(left_square, verbose=False)
+        return time.time() - t_yolo, out
+
+    def compute_disparity(self, left_rectified, right_rectified):
+        """Fast disparity computation using StereoBM"""
+        t_disp = time.time()
+        
+        # Convert to grayscale for StereoBM
+        left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
+        right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
+        
+        # Compute disparity
+        disparity = self.stereo.compute(left_gray, right_gray)
+        
+        # Convert to float and scale (StereoBM returns 16-bit fixed-point)
+        disparity = disparity.astype(np.float32) / 16.0
+        
+        return time.time() - t_disp, disparity
+
     def camera_callback(self):
-        """Main camera processing loop"""
-        start_time = time.time()
+        timing = {}
+        t_preprocess_start = time.time()
         
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warn('Failed to capture frame')
             return
 
-        # Split frame into left and right images
+        # Preprocess frames
         frame_width = frame.shape[1] // 2
         left_frame = frame[:, :frame_width]
         right_frame = frame[:, frame_width:]
-
-        # Resize frames to 640x480
         left_frame = cv2.resize(left_frame, (640, 480))
         right_frame = cv2.resize(right_frame, (640, 480))
 
         # Rectify images
-        left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, 
-                                 cv2.INTER_LINEAR)
-        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, 
-                                  cv2.INTER_LINEAR)
-
-        # FOR PERPLEXITY: SEND IMAGES TO VISION MODEL
-
-
-        # # Convert to grayscale for disparity
-        # left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
-        # right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
-
-        # # Compute disparity map
-        # disparity = self.stereo.compute(left_gray, right_gray)
+        left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
+        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
         
-        # # Normalize disparity for visualization
-        # disparity_normalized = cv2.normalize(disparity, None, alpha=0, beta=255, 
-        #                                   norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        # Square padding for YOLO
+        left_square = cv2.copyMakeBorder(left_rectified, 80, 80, 0, 0, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        
+        timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
 
-        if self.vision_mode:
-            # Process frame here
-            perf_msg = PerformanceMetrics()
-            perf_msg.fps = 30.0
-            self.pub_performance.publish(perf_msg)
-            
-            det_msg = DetectionArray()
-            self.pub_detections.publish(det_msg)
-            
-            target_msg = Float64MultiArray()
-            target_msg.data = [0.0, 0.0, 0.0]
-            self.pub_targets.publish(target_msg)
+        # Submit parallel tasks
+        yolo_future = self.thread_pool.submit(self.run_model, left_square)
+        disparity_future = self.thread_pool.submit(self.compute_disparity, left_rectified, right_rectified)
 
-        # if self.save_frames:
-        #     timestamp = self.get_clock().now().nanoseconds
-        #     cv2.imwrite(f"{self.save_location}/left_{timestamp}.jpg", left_rectified)
-        #     cv2.imwrite(f"{self.save_location}/right_{timestamp}.jpg", right_rectified)
-        #     cv2.imwrite(f"{self.save_location}/disparity_{timestamp}.jpg", disparity_normalized)
+        # Get results and timing
+        
+        t_yolo, detections = yolo_future.result()
+        timing['yolo_inference'] = t_yolo * 1000
 
-        # Calculate and store frame processing time
-        process_time = (time.time() - start_time) * 1000  # Convert to milliseconds
-        self.frame_times.append(process_time)
-        self.frame_counter += 1
+        t_disparity, disparity = disparity_future.result()
+        timing['disparity'] = t_disparity * 1000
 
-        # Print performance metrics every 10 frames
+        # Log timing metrics every 10 frames
         if self.frame_counter % 10 == 0:
-            avg_time = sum(self.frame_times) / len(self.frame_times)
-            avg_fps = 1000 / avg_time
-            self.get_logger().info(f'Average processing time: {avg_time:.2f}ms, FPS: {avg_fps:.2f}')
-
-    def __del__(self):
-        """Cleanup when node is destroyed"""
-        if hasattr(self, 'cap') and self.cap.isOpened():
-            self.cap.release()
+            self.get_logger().info(
+                f'Timing => Preprox={timing["preprocessing"]:.1f}, '
+                f'YOLO={timing["yolo_inference"]:.1f}, '
+                f'Disparity={timing["disparity"]:.1f}, '
+                f'Total={sum(timing.values()):.1f} | '
+                f'FPS={1 / sum(timing.values()) * 1000:.1f}'
+            )
 
 def main(args=None):
     rclpy.init(args=args)
-    camera_node = CameraNode()
-    rclpy.spin(camera_node)
-    camera_node.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
+    node = CameraNode()
+    
+    # Use MultiThreadedExecutor for the ROS2 node
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    
+    try:
+        executor.spin()
+    finally:
+        node.thread_pool.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()

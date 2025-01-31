@@ -26,12 +26,18 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ball_model_file',
-            default_value='models/ball.xml',
+            default_value=PathJoinSubstitution([
+                get_package_share_directory('blimp_vision'),
+                'models/ball'
+            ]),
             description='Path to ball detection model'
         ),
         DeclareLaunchArgument(
             'goal_model_file',
-            default_value='models/goal.xml',
+            default_value=PathJoinSubstitution([
+                get_package_share_directory('blimp_vision'),
+                'models/goal'
+            ]),
             description='Path to goal detection model'
         ),
         DeclareLaunchArgument(
