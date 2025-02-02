@@ -5,8 +5,8 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from std_msgs.msg import Bool, Float64MultiArray
-from sensor_msgs.msg import Image, CompressedImage
+from std_msgs.msg import Bool, Float64MultiArray, ByteMultiArray
+from sensor_msgs.msg import CompressedImage
 from blimp_vision_msgs.msg import PerformanceMetrics, DetectionArray
 import yaml
 import os
@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 from collections import defaultdict
 from rclpy.callback_groups import ReentrantCallbackGroup
+from blimp_vision.ball_tracker import BallTracker
 
 from ultralytics import YOLO
 
@@ -68,8 +69,8 @@ class CameraNode(Node):
         self.load_calibration()
 
         # Initialize YOLO models
-        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect')
-        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect')
+        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect', conf=0.55, )
+        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect', conf=0.55, )
 
         # Compute rectification maps
         self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
@@ -96,8 +97,11 @@ class CameraNode(Node):
         # Initialize other variables
         self.bridge = CvBridge()
         self.ball_search_mode = True
+        self.yellow_goal_mode = False
+        self.goal_color = None
         self.frame_counter = 0
         self.track_history = defaultdict(lambda: [])
+        self.tracker = BallTracker(self.get(cv2.CAP_PROP_FRAME_WIDTH)/2, self.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # Initialize publishers
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
@@ -106,7 +110,7 @@ class CameraNode(Node):
         self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
 
         # Initialize subscriber
-        self.vision_mode_sub = self.create_subscription(Bool, 'vision_mode', self.vision_mode_callback, 10)
+        self.vision_mode_sub = self.create_subscription(ByteMultiArray, 'vision_mode', self.vision_mode_callback, 10)
 
         self.camera_lock = threading.Lock()
         self.frame_queue = deque(maxlen=2)
@@ -145,7 +149,8 @@ class CameraNode(Node):
         
     def vision_mode_callback(self, msg):
         """Handle vision mode changes"""
-        self.ball_search_mode = msg.data
+        self.ball_search_mode = msg.data[0]
+        self.yellow_goal_mode = msg.data[1]
         if self.verbose_mode:
             self.get_logger().info(f'Vision mode changed to: {self.vision_mode}')
 
@@ -201,6 +206,9 @@ class CameraNode(Node):
         #t_yolo, detections = yolo_future.result()
         t_yolo, detections = self.run_model(left_frame)
         timing['yolo_inference'] = t_yolo * 1000
+
+        #Post-process detections
+        bbox, cls = self.tracker.select_target(detections, disp_map, color_mode=None if self.ball_search_mode else self.yellow_goal_mode) )
 
         timing['total'] = (time.time() - t_total) * 1000
 
