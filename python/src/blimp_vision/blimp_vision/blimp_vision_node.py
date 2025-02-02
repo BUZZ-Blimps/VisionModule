@@ -6,7 +6,7 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from std_msgs.msg import Bool, Float64MultiArray
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from blimp_vision_msgs.msg import PerformanceMetrics, DetectionArray
 import yaml
 import os
@@ -15,6 +15,7 @@ import time
 from rclpy.executors import MultiThreadedExecutor
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from collections import defaultdict
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from ultralytics import YOLO
@@ -48,18 +49,6 @@ class CameraNode(Node):
         self.save_frames = self.get_parameter('save_frames').value
         self.save_location = self.get_parameter('save_location').value
 
-        # Initialize publishers
-        self.pub_performance = self.create_publisher(
-            PerformanceMetrics, 'performance_metrics', 10)
-        self.pub_detections = self.create_publisher(
-            DetectionArray, 'detections', 10)
-        self.pub_targets = self.create_publisher(
-            Float64MultiArray, 'targets', 10)
-
-        # Initialize subscriber
-        self.vision_mode_sub = self.create_subscription(
-            Bool, 'vision_mode', self.vision_mode_callback, 10)
-
         # Initialize OpenCV capture
         self.cap = cv2.VideoCapture(self.device_path)
         if not self.cap.isOpened():
@@ -67,17 +56,15 @@ class CameraNode(Node):
             return
 
         # Initialize camera properties and parameters
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 60)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         # Initialize camera calibration for left and right cameras
-        self.left_camera_matrix = None
-        self.left_distortion_coefficients = None
-
-        self.right_camera_matrix = None
-        self.right_distortion_coefficients = None
-
+        self.left_camera_matrix, self.right_camera_matrix = None, None
+        self.left_distortion_coefficients, self.right_distortion_coefficients = None, None
         self.load_calibration()
 
         # Initialize YOLO models
@@ -89,9 +76,6 @@ class CameraNode(Node):
             self.left_camera_matrix, self.left_distortion_coefficients, None, None, (640, 480), cv2.CV_32FC1)
         self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
             self.right_camera_matrix, self.right_distortion_coefficients, None, None, (640, 480), cv2.CV_32FC1)
-
-        self.frame_times = deque(maxlen=30)
-        self.frame_counter = 0
         
         # Initialize stereo matcher
         self.stereo = cv2.StereoBM.create(
@@ -109,18 +93,26 @@ class CameraNode(Node):
         self.stereo.setSpeckleRange(8)
         self.stereo.setDisp12MaxDiff(1)
 
-
         # Initialize other variables
         self.bridge = CvBridge()
-        self.vision_mode = False
-        self.thread_pool = ThreadPoolExecutor(max_workers=2)
+        self.ball_search_mode = True
+        self.frame_counter = 0
+        self.track_history = defaultdict(lambda: [])
 
+        # Initialize publishers
+        self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
+        self.pub_detections = self.create_publisher(DetectionArray, 'detections', 10)
+        self.pub_targets = self.create_publisher(Float64MultiArray, 'targets', 10)
+        self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
+
+        # Initialize subscriber
+        self.vision_mode_sub = self.create_subscription(Bool, 'vision_mode', self.vision_mode_callback, 10)
+
+        self.camera_lock = threading.Lock()
+        self.frame_queue = deque(maxlen=2)
+        self.thread_pool = ThreadPoolExecutor(max_workers=2)
         self.callback_group = ReentrantCallbackGroup()
-        self.timer = self.create_timer(
-            1/30.0,  # 30 FPS
-            self.camera_callback,
-            callback_group=self.callback_group
-        )
+        self.timer = self.create_timer(1/30.0, self.camera_callback, callback_group=self.callback_group)
 
     def load_calibration(self):
         """Load camera calibration parameters for left and right cameras"""
@@ -147,18 +139,22 @@ class CameraNode(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to load calibration files: {e}')
 
+    def capture_frame(self):
+        with self.camera_lock:
+            return self.cap.read()
+        
     def vision_mode_callback(self, msg):
         """Handle vision mode changes"""
-        self.vision_mode = msg.data
+        self.ball_search_mode = msg.data
         if self.verbose_mode:
             self.get_logger().info(f'Vision mode changed to: {self.vision_mode}')
 
     def run_model(self, left_square):
         t_yolo = time.time()
-        if np.random.rand() > 0.5:
-            out = self.ball_rknn(left_square, verbose=False)
+        if self.ball_search_mode:
+            out = self.ball_rknn.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
         else:
-            out = self.goal_rknn(left_square, verbose=False)
+            out = self.goal_rknn.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
         return time.time() - t_yolo, out
 
     def compute_disparity(self, left_rectified, right_rectified):
@@ -179,57 +175,56 @@ class CameraNode(Node):
 
     def camera_callback(self):
         timing = {}
-        t_preprocess_start = time.time()
-        
-        ret, frame = self.cap.read()
+        t_total, t_preprocess_start = time.time(), time.time()
+
+        ret, frame = self.capture_frame()
         if not ret:
-            self.get_logger().warn('Failed to capture frame')
+            self.get_logger().error('Failed to capture frame')
             return
 
         # Preprocess frames
         frame_width = frame.shape[1] // 2
         left_frame = frame[:, :frame_width]
         right_frame = frame[:, frame_width:]
-        left_frame = cv2.resize(left_frame, (640, 480))
-        right_frame = cv2.resize(right_frame, (640, 480))
+
+        #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
 
         # Rectify images
         left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
-        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
-        
-        # Square padding for YOLO
-        left_square = cv2.copyMakeBorder(left_rectified, 80, 80, 0, 0, cv2.BORDER_CONSTANT, value=[0, 0, 0])
-        
+        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR) 
         timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
 
-        # Submit parallel tasks
-        yolo_future = self.thread_pool.submit(self.run_model, left_square)
-        disparity_future = self.thread_pool.submit(self.compute_disparity, left_rectified, right_rectified)
-
-        # Get results and timing
-        
-        t_yolo, detections = yolo_future.result()
-        timing['yolo_inference'] = t_yolo * 1000
-
-        t_disparity, disparity = disparity_future.result()
+        t_disparity, disparity = self.compute_disparity(left_rectified, right_rectified)
         timing['disparity'] = t_disparity * 1000
 
-        # Log timing metrics every 10 frames
-        if self.frame_counter % 10 == 0:
-            self.get_logger().info(
-                f'Timing => Preprox={timing["preprocessing"]:.1f}, '
-                f'YOLO={timing["yolo_inference"]:.1f}, '
-                f'Disparity={timing["disparity"]:.1f}, '
-                f'Total={sum(timing.values()):.1f} | '
-                f'FPS={1 / sum(timing.values()) * 1000:.1f}'
-            )
+        # Get results and timing
+        #t_yolo, detections = yolo_future.result()
+        t_yolo, detections = self.run_model(left_frame)
+        timing['yolo_inference'] = t_yolo * 1000
+
+        timing['total'] = (time.time() - t_total) * 1000
+
+        self.get_logger().info(
+            f'Timing => Preprox={timing["preprocessing"]:.1f}, '
+            f'YOLO={timing["yolo_inference"]:.1f}, '
+            f'Disparity={timing["disparity"]:.1f}, '
+            f'Total={timing["total"]:.1f} | '
+            f'FPS={1 / timing["total"] * 1000:1f}'
+        )
+
+        # Publish performance metrics
+        msg = PerformanceMetrics()
+        msg.yolo_time = timing['yolo_inference']
+        msg.disparity_time = timing['disparity']
+        msg.total_time = timing['total']
+        self.pub_performance.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
     node = CameraNode()
     
     # Use MultiThreadedExecutor for the ROS2 node
-    executor = MultiThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
     
     try:
