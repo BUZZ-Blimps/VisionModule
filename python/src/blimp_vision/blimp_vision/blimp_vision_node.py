@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from std_msgs.msg import Bool, Float64MultiArray, ByteMultiArray
 from sensor_msgs.msg import CompressedImage
-from blimp_vision_msgs.msg import PerformanceMetrics, DetectionArray
+from blimp_vision_msgs.msg import PerformanceMetrics, Detection
 import yaml
 import os
 from collections import deque
@@ -69,8 +69,8 @@ class CameraNode(Node):
         self.load_calibration()
 
         # Initialize YOLO models
-        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect', conf=0.55, )
-        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect', conf=0.55, )
+        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect')
+        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect')
 
         # Compute rectification maps
         self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
@@ -101,12 +101,11 @@ class CameraNode(Node):
         self.goal_color = None
         self.frame_counter = 0
         self.track_history = defaultdict(lambda: [])
-        self.tracker = BallTracker(self.get(cv2.CAP_PROP_FRAME_WIDTH)/2, self.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.tracker = BallTracker(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)/2, self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # Initialize publishers
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
-        self.pub_detections = self.create_publisher(DetectionArray, 'detections', 10)
-        self.pub_targets = self.create_publisher(Float64MultiArray, 'targets', 10)
+        self.pub_detections = self.create_publisher(Detection, 'detections', 10)
         self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
 
         # Initialize subscriber
@@ -156,10 +155,8 @@ class CameraNode(Node):
 
     def run_model(self, left_square):
         t_yolo = time.time()
-        if self.ball_search_mode:
-            out = self.ball_rknn.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
-        else:
-            out = self.goal_rknn.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
+        selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
+        out = selected_model.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.55)[0]
         return time.time() - t_yolo, out
 
     def compute_disparity(self, left_rectified, right_rectified):
@@ -177,6 +174,12 @@ class CameraNode(Node):
         disparity = disparity.astype(np.float32) / 16.0
         
         return time.time() - t_disp, disparity
+    
+    def filter_disparity(self, disparity, bbox):
+        """Filter disparity values within bounding box"""
+        x, y, w, h = bbox
+        disparity_roi = disparity[y-h//2:y+h//2, x-w//2:x+w//2]
+        return np.mean(disparity_roi)
 
     def camera_callback(self):
         timing = {}
@@ -208,7 +211,20 @@ class CameraNode(Node):
         timing['yolo_inference'] = t_yolo * 1000
 
         #Post-process detections
-        bbox, cls = self.tracker.select_target(detections, disp_map, color_mode=None if self.ball_search_mode else self.yellow_goal_mode) )
+        detection_msg = self.tracker.select_target(detections, color_mode=None if self.ball_search_mode else self.yellow_goal_mode)
+        
+        if detection_msg is not None:
+            detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
+            detection_msg.header.stamp = self.get_clock().now().to_msg()
+            self.pub_detections.publish(detection_msg)
+
+        # Publish debug view with drawn on detection, depth, class, and track id
+        debug_view = left_rectified.copy()
+        if detection_msg is not None:
+            x, y, w, h = detection_msg.bbox
+            cv2.rectangle(debug_view, (x-w//2, y-h//2), (x+w//2, y+h//2), (0, 255, 0), 2)
+            cv2.putText(debug_view, f'{detection_msg.cls} {detection_msg.track_id} {detection_msg.depth:.1f}m', (x-w//2, y-h//2-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        self.pub_debug_view.publish(self.bridge.cv2_to_compressed_imgmsg(debug_view))
 
         timing['total'] = (time.time() - t_total) * 1000
 

@@ -1,5 +1,5 @@
 import numpy as np
-
+from blimp_vision_msgs.msg import Detection
 
 class BallTracker:
     def __init__(self, width, height):
@@ -18,7 +18,7 @@ class BallTracker:
         """Calculate area of detection bounding box"""
         return detection[2] * detection[3]
     
-    def select_target(self, disp_map detections, color_mode = None):
+    def select_target(self, detections, color_mode = None):
         """Select the optimal target based on size and center proximity"""
         if self.frame_center is None:
             raise ValueError("Frame dimensions not initialized")
@@ -31,41 +31,49 @@ class BallTracker:
         
         boxes = detections.boxes.xywh.cpu()
         track_ids = detections.boxes.id.int().cpu().tolist()   
+        
+        best_target = None
             
         # If currently tracking an object, look for it first
         if self.current_tracked_id is not None:
             current_target = boxes[track_ids.index(self.current_tracked_id)]
             if current_target is not None:
                 self.frames_without_target = 0
-                return (current_target, self.current_tracked_id)
+                best_target = self.current_tracked_id
             
-        # Check if model is in goal mode (yellow = 1, orange = 0)
-        if color_mode is not None:
-            # Filter out detections that are on either side of the goal_cutoff_index depending on color mode
-            if detections.color_mode == 1:
-                boxes = boxes[boxes.cls.cpu() >= self.goal_cutoff_index]
-            else:
-                boxes = boxes[boxes.cls.cpu() < self.goal_cutoff_index]
-             
-        # Select new target based on size and center proximity
-        best_target = None
-        best_score = float('inf')
-        
-        for box, track_id in zip(boxes, track_ids):
-            center_distance = self.calculate_center_distance(box)
-            area = self.calculate_area(box)
+        # No prior detection, look for a new target
+        else:
+            # Check if model is in goal mode (yellow = 1, orange = 0)
+            if color_mode is not None:
+                # Filter out detections that are on either side of the goal_cutoff_index depending on color mode
+                if detections.color_mode == 1:
+                    boxes = boxes[boxes.cls.cpu() >= self.goal_cutoff_index]
+                else:
+                    boxes = boxes[boxes.cls.cpu() < self.goal_cutoff_index]
             
-            # Score combines distance to center (weighted less) and size (weighted more)
-            # Lower score is better
-            score = (center_distance / area) * 100
-            
-            if score < best_score:
-                best_score = score
-                best_target = (box, track_id)
+            best_score = float('inf')
+            for box, track_id in zip(boxes, track_ids):
+                center_distance = self.calculate_center_distance(box)
+                area = self.calculate_area(box)
+                
+                # Score combines distance to center (weighted less) and size (weighted more)
+                # Lower score is better
+                score = (center_distance / area) * 100
+                
+                if score < best_score:
+                    best_score = score
+                    best_target = track_id
         
-        if best_target is not None:
-            self.current_tracked_id = best_target[1]
-            self.frames_without_target = 0
+        self.current_tracked_id = best_target
+        self.frames_without_target = 0
+    
+        best_box = boxes[track_ids.index(self.current_tracked_id)]
+
+        detections_msg = Detection()
+        detections_msg.cls = boxes.names[best_box.cls.cpu().tolist()[0]]
+        detections_msg.bbox = best_box.bbox.cpu().tolist()
+        detections_msg.confidence = best_box.conf.cpu().tolist()[0]
+        detections_msg.track_id = self.current_tracked_id
         
-        return best_target
+        return detections_msg
 
