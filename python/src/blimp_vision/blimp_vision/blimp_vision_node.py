@@ -177,9 +177,9 @@ class CameraNode(Node):
     
     def filter_disparity(self, disparity, bbox):
         """Filter disparity values within bounding box"""
-        x, y, w, h = bbox
+        x, y, w, h = bbox.astype(int)
         disparity_roi = disparity[y-h//2:y+h//2, x-w//2:x+w//2]
-        return np.mean(disparity_roi)
+        return np.mean(disparity_roi) * 1.0
 
     def camera_callback(self):
         timing = {}
@@ -215,15 +215,14 @@ class CameraNode(Node):
         
         if detection_msg is not None:
             detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
-            detection_msg.header.stamp = self.get_clock().now().to_msg()
             self.pub_detections.publish(detection_msg)
 
         # Publish debug view with drawn on detection, depth, class, and track id
         debug_view = left_rectified.copy()
         if detection_msg is not None:
-            x, y, w, h = detection_msg.bbox
+            x, y, w, h = detection_msg.bbox.astype(int)
             cv2.rectangle(debug_view, (x-w//2, y-h//2), (x+w//2, y+h//2), (0, 255, 0), 2)
-            cv2.putText(debug_view, f'{detection_msg.cls} {detection_msg.track_id} {detection_msg.depth:.1f}m', (x-w//2, y-h//2-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(debug_view, f'{detection_msg.obj_class} {detection_msg.track_id} {detection_msg.depth:.1f}m', (x-w//2, y-h//2-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         self.pub_debug_view.publish(self.bridge.cv2_to_compressed_imgmsg(debug_view))
 
         timing['total'] = (time.time() - t_total) * 1000

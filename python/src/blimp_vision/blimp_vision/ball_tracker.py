@@ -36,7 +36,7 @@ class BallTracker:
             
         # If currently tracking an object, look for it first
         if self.current_tracked_id is not None:
-            current_target = boxes[track_ids.index(self.current_tracked_id)]
+            current_target = boxes[track_ids.index(self.current_tracked_id)] if self.current_tracked_id in track_ids else None
             if current_target is not None:
                 self.frames_without_target = 0
                 best_target = self.current_tracked_id
@@ -64,15 +64,18 @@ class BallTracker:
                     best_score = score
                     best_target = track_id
         
+        if best_target is None:
+            return None
+
         self.current_tracked_id = best_target
         self.frames_without_target = 0
     
-        best_box = boxes[track_ids.index(self.current_tracked_id)]
+        best_box = detections[track_ids.index(self.current_tracked_id)]
 
         detections_msg = Detection()
-        detections_msg.cls = boxes.names[best_box.cls.cpu().tolist()[0]]
-        detections_msg.bbox = best_box.bbox.cpu().tolist()
-        detections_msg.confidence = best_box.conf.cpu().tolist()[0]
+        detections_msg.obj_class = detections.names[int(best_box.boxes.cls.cpu().tolist()[0])]
+        detections_msg.bbox = best_box.boxes.xywh.cpu().tolist()[0]
+        detections_msg.confidence = best_box.boxes.conf.cpu().tolist()[0]
         detections_msg.track_id = self.current_tracked_id
         
         return detections_msg
