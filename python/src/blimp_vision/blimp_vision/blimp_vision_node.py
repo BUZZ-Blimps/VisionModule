@@ -5,7 +5,7 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from std_msgs.msg import Bool, Float64MultiArray, ByteMultiArray
+from std_msgs.msg import Bool, Float64MultiArray, UInt8MultiArray
 from sensor_msgs.msg import CompressedImage
 from blimp_vision_msgs.msg import PerformanceMetrics, Detection
 import yaml
@@ -109,7 +109,7 @@ class CameraNode(Node):
         self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
 
         # Initialize subscriber
-        self.vision_mode_sub = self.create_subscription(ByteMultiArray, 'vision_mode', self.vision_mode_callback, 10)
+        self.vision_mode_sub = self.create_subscription(UInt8MultiArray, 'vision_mode', self.vision_mode_callback, 10)
 
         self.camera_lock = threading.Lock()
         self.frame_queue = deque(maxlen=2)
@@ -148,15 +148,15 @@ class CameraNode(Node):
         
     def vision_mode_callback(self, msg):
         """Handle vision mode changes"""
-        self.ball_search_mode = msg.data[0]
-        self.yellow_goal_mode = msg.data[1]
+        self.ball_search_mode = bool(msg.data[0])
+        self.yellow_goal_mode = bool(msg.data[1])
         if self.verbose_mode:
             self.get_logger().info(f'Vision mode changed to: {self.vision_mode}')
 
     def run_model(self, left_square):
         t_yolo = time.time()
         selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        out = selected_model.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.55)[0]
+        out = selected_model.track(left_square, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
         return time.time() - t_yolo, out
 
     def compute_disparity(self, left_rectified, right_rectified):
@@ -211,14 +211,14 @@ class CameraNode(Node):
         timing['yolo_inference'] = t_yolo * 1000
 
         #Post-process detections
-        detection_msg = self.tracker.select_target(detections, color_mode=None if self.ball_search_mode else self.yellow_goal_mode)
+        detection_msg = self.tracker.select_target(detections, yellow_goal_mode = None if self.ball_search_mode else self.yellow_goal_mode)
         
         if detection_msg is not None:
             detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
             self.pub_detections.publish(detection_msg)
 
         # Publish debug view with drawn on detection, depth, class, and track id
-        debug_view = left_rectified.copy()
+        debug_view = left_frame.copy()
         if detection_msg is not None:
             x, y, w, h = detection_msg.bbox.astype(int)
             cv2.rectangle(debug_view, (x-w//2, y-h//2), (x+w//2, y+h//2), (0, 255, 0), 2)
@@ -227,13 +227,13 @@ class CameraNode(Node):
 
         timing['total'] = (time.time() - t_total) * 1000
 
-        self.get_logger().info(
-            f'Timing => Preprox={timing["preprocessing"]:.1f}, '
-            f'YOLO={timing["yolo_inference"]:.1f}, '
-            f'Disparity={timing["disparity"]:.1f}, '
-            f'Total={timing["total"]:.1f} | '
-            f'FPS={1 / timing["total"] * 1000:1f}'
-        )
+        # self.get_logger().info(
+        #     f'Timing => Preprox={timing["preprocessing"]:.1f}, '
+        #     f'YOLO={timing["yolo_inference"]:.1f}, '
+        #     f'Disparity={timing["disparity"]:.1f}, '
+        #     f'Total={timing["total"]:.1f} | '
+        #     f'FPS={1 / timing["total"] * 1000:1f}'
+        # )
 
         # Publish performance metrics
         msg = PerformanceMetrics()

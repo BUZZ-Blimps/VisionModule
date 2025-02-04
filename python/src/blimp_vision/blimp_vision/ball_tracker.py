@@ -5,7 +5,7 @@ class BallTracker:
     def __init__(self, width, height):
         self.current_tracked_id = None
         self.frame_center = (width // 2, height // 2)
-        self.lost_track_threshold = 5  # Frames to wait before declaring track lost
+        self.lost_track_threshold = 10  # Frames to wait before declaring track lost
         self.frames_without_target = 0
         self.goal_cutoff_index = 3.0
         
@@ -18,12 +18,12 @@ class BallTracker:
         """Calculate area of detection bounding box"""
         return detection[2] * detection[3]
     
-    def select_target(self, detections, color_mode = None):
+    def select_target(self, detections, yellow_goal_mode = None):
         """Select the optimal target based on size and center proximity"""
         if self.frame_center is None:
             raise ValueError("Frame dimensions not initialized")
         
-        if not detections:
+        if not detections or detections.boxes.id is None:
             self.frames_without_target += 1
             if self.frames_without_target >= self.lost_track_threshold:
                 self.current_tracked_id = None
@@ -36,20 +36,23 @@ class BallTracker:
             
         # If currently tracking an object, look for it first
         if self.current_tracked_id is not None:
-            current_target = boxes[track_ids.index(self.current_tracked_id)] if self.current_tracked_id in track_ids else None
-            if current_target is not None:
+            if self.current_tracked_id in track_ids:
                 self.frames_without_target = 0
                 best_target = self.current_tracked_id
+            else:
+                self.frames_without_target += 1
+                if self.frames_without_target >= self.lost_track_threshold:
+                    self.current_tracked_id = None
             
         # No prior detection, look for a new target
         else:
             # Check if model is in goal mode (yellow = 1, orange = 0)
-            if color_mode is not None:
+            if yellow_goal_mode is not None:
                 # Filter out detections that are on either side of the goal_cutoff_index depending on color mode
-                if detections.color_mode == 1:
-                    boxes = boxes[boxes.cls.cpu() >= self.goal_cutoff_index]
+                if yellow_goal_mode:
+                    boxes = boxes[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
                 else:
-                    boxes = boxes[boxes.cls.cpu() < self.goal_cutoff_index]
+                    boxes = boxes[detections.boxes.cls.cpu() < self.goal_cutoff_index]
             
             best_score = float('inf')
             for box, track_id in zip(boxes, track_ids):
