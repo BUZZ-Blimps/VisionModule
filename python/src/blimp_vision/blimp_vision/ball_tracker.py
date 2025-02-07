@@ -5,7 +5,7 @@ class BallTracker:
     def __init__(self, width, height):
         self.current_tracked_id = None
         self.frame_center = (width // 2, height // 2)
-        self.lost_track_threshold = 10  # Frames to wait before declaring track lost
+        self.lost_track_threshold = 5  # Frames to wait before declaring track lost
         self.frames_without_target = 0
         self.goal_cutoff_index = 3.0
         
@@ -50,14 +50,17 @@ class BallTracker:
             if yellow_goal_mode is not None:
                 # Filter out detections that are on either side of the goal_cutoff_index depending on color mode
                 if yellow_goal_mode:
-                    boxes = boxes[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
-                else:
                     boxes = boxes[detections.boxes.cls.cpu() < self.goal_cutoff_index]
+                else:
+                    boxes = boxes[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
             
             best_score = float('inf')
             for box, track_id in zip(boxes, track_ids):
                 center_distance = self.calculate_center_distance(box)
                 area = self.calculate_area(box)
+                
+                if area < 20: # Ignore small detections
+                    continue
                 
                 # Score combines distance to center (weighted less) and size (weighted more)
                 # Lower score is better

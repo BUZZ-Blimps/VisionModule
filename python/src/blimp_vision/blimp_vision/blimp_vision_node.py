@@ -5,7 +5,7 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from std_msgs.msg import Bool, Float64MultiArray, UInt8MultiArray
+from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
 from sensor_msgs.msg import CompressedImage
 from blimp_vision_msgs.msg import PerformanceMetrics, Detection
 import yaml
@@ -69,8 +69,8 @@ class CameraNode(Node):
         self.load_calibration()
 
         # Initialize YOLO models
-        self.ball_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/ball/yolo11n_rknn_model',task='detect')
-        self.goal_rknn = YOLO('/home/opi/VisionModule/python/src/blimp_vision/models/goal/yolo11n_rknn_model',task='detect')
+        self.ball_rknn = YOLO(self.ball_model_file,task='detect')
+        self.goal_rknn = YOLO(self.goal_model_file,task='detect')
 
         # Compute rectification maps
         self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
@@ -105,11 +105,12 @@ class CameraNode(Node):
 
         # Initialize publishers
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
-        self.pub_detections = self.create_publisher(Detection, 'detections', 10)
+        #self.pub_detections = self.create_publisher(Detection, 'detections', 10)
+        self.pub_detections = self.create_publisher(Float64MultiArray, 'targets', 10)
         self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
 
         # Initialize subscriber
-        self.vision_mode_sub = self.create_subscription(UInt8MultiArray, 'vision_mode', self.vision_mode_callback, 10)
+        self.vision_mode_sub = self.create_subscription(Int8MultiArray, 'vision_toggle', self.vision_mode_callback, 10)
 
         self.camera_lock = threading.Lock()
         self.frame_queue = deque(maxlen=2)
@@ -215,7 +216,8 @@ class CameraNode(Node):
         
         if detection_msg is not None:
             detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
-            self.pub_detections.publish(detection_msg)
+            #self.pub_detections.publish(detection_msg)
+            self.pub_detections.publish(Float64MultiArray(data=[detection_msg.bbox[0], detection_msg.bbox[1], detection_msg.depth]))
 
         # Publish debug view with drawn on detection, depth, class, and track id
         debug_view = left_frame.copy()

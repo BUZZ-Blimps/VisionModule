@@ -4,6 +4,8 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from ament_index_python.packages import get_package_share_directory
 
+blimp_name = 'SillyAh'
+
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -28,7 +30,7 @@ def generate_launch_description():
             'ball_model_file',
             default_value=PathJoinSubstitution([
                 get_package_share_directory('blimp_vision'),
-                'models/ball'
+                'models/balloon/balloon_v11s_rknn_model'
             ]),
             description='Path to ball detection model'
         ),
@@ -36,7 +38,7 @@ def generate_launch_description():
             'goal_model_file',
             default_value=PathJoinSubstitution([
                 get_package_share_directory('blimp_vision'),
-                'models/goal'
+                'models/goal/goal_v11s_rknn_model'
             ]),
             description='Path to goal detection model'
         ),
@@ -59,6 +61,7 @@ def generate_launch_description():
             package='blimp_vision',
             executable='blimp_vision_node',
             name='blimp_vision_node',
+            namespace=blimp_name,
             parameters=[{
                 'camera_number': LaunchConfiguration('camera_number'),
                 'device_path': LaunchConfiguration('device_path'),
