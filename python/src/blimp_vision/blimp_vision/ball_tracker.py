@@ -53,13 +53,15 @@ class BallTracker:
                     boxes = boxes[detections.boxes.cls.cpu() < self.goal_cutoff_index]
                 else:
                     boxes = boxes[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
+            else:
+                boxes = boxes[detections.boxes.cls.cpu() < 2]
             
             best_score = float('inf')
             for box, track_id in zip(boxes, track_ids):
                 center_distance = self.calculate_center_distance(box)
                 area = self.calculate_area(box)
                 
-                if area < 20: # Ignore small detections
+                if area < 100: # Ignore small detections
                     continue
                 
                 # Score combines distance to center (weighted less) and size (weighted more)

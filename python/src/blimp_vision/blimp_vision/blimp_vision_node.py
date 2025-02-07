@@ -113,10 +113,10 @@ class CameraNode(Node):
         self.vision_mode_sub = self.create_subscription(Int8MultiArray, 'vision_toggle', self.vision_mode_callback, 10)
 
         self.camera_lock = threading.Lock()
-        self.frame_queue = deque(maxlen=2)
+        self.frame_queue = deque(maxlen=4)
         self.thread_pool = ThreadPoolExecutor(max_workers=2)
         self.callback_group = ReentrantCallbackGroup()
-        self.timer = self.create_timer(1/30.0, self.camera_callback, callback_group=self.callback_group)
+        self.timer = self.create_timer(1/60.0, self.camera_callback, callback_group=self.callback_group)
 
     def load_calibration(self):
         """Load camera calibration parameters for left and right cameras"""

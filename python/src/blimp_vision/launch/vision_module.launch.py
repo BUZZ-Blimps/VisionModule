@@ -30,7 +30,7 @@ def generate_launch_description():
             'ball_model_file',
             default_value=PathJoinSubstitution([
                 get_package_share_directory('blimp_vision'),
-                'models/balloon/balloon_v11s_rknn_model'
+                'models/balloon/balloon_v11n_rknn_model'
             ]),
             description='Path to ball detection model'
         ),
@@ -38,7 +38,7 @@ def generate_launch_description():
             'goal_model_file',
             default_value=PathJoinSubstitution([
                 get_package_share_directory('blimp_vision'),
-                'models/goal/goal_v11s_rknn_model'
+                'models/goal/goal_v11n_rknn_model'
             ]),
             description='Path to goal detection model'
         ),
