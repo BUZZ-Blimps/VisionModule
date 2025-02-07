@@ -5,7 +5,8 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
+from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray, Int64MultiArray
+from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDurabilityPolicy
 from sensor_msgs.msg import CompressedImage
 from blimp_vision_msgs.msg import PerformanceMetrics, Detection
 import yaml
@@ -88,10 +89,12 @@ class CameraNode(Node):
         self.stereo.setPreFilterSize(5)
         self.stereo.setPreFilterCap(61)
         self.stereo.setMinDisparity(0)
+        self.stereo.setNumDisparities(64)
+        self.stereo.setBlockSize(5)
         self.stereo.setTextureThreshold(507)
-        self.stereo.setUniquenessRatio(0)
-        self.stereo.setSpeckleWindowSize(0)
-        self.stereo.setSpeckleRange(8)
+        self.stereo.setUniquenessRatio(5)
+        self.stereo.setSpeckleWindowSize(100)
+        self.stereo.setSpeckleRange(32)
         self.stereo.setDisp12MaxDiff(1)
 
         # Initialize other variables
@@ -105,12 +108,19 @@ class CameraNode(Node):
 
         # Initialize publishers
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
-        #self.pub_detections = self.create_publisher(Detection, 'detections', 10)
         self.pub_detections = self.create_publisher(Float64MultiArray, 'targets', 10)
         self.pub_debug_view = self.create_publisher(CompressedImage, 'debug_view', 10)
 
+        bool_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
+        )
+
         # Initialize subscriber
-        self.vision_mode_sub = self.create_subscription(Int8MultiArray, 'vision_toggle', self.vision_mode_callback, 10)
+        self.state_sub = self.create_subscription(Int64MultiArray, 'state', self.state_callback, 10)
+        self.goalcolor_sub = self.create_subscription(Bool, 'goal_color', self.goal_color_callback, bool_qos)
 
         self.camera_lock = threading.Lock()
         self.frame_queue = deque(maxlen=4)
@@ -147,12 +157,15 @@ class CameraNode(Node):
         with self.camera_lock:
             return self.cap.read()
         
-    def vision_mode_callback(self, msg):
-        """Handle vision mode changes"""
-        self.ball_search_mode = bool(msg.data[0])
-        self.yellow_goal_mode = bool(msg.data[1])
-        if self.verbose_mode:
-            self.get_logger().info(f'Vision mode changed to: {self.vision_mode}')
+    def state_callback(self, msg):
+        self.state = msg.data[0]
+        if self.state == 0:
+            self.ball_search_mode = 1
+        elif self.state == 4:
+            self.ball_search_mode = 0
+    
+    def goal_color_callback(self, msg):
+        self.yellow_goal_mode = msg.data
 
     def run_model(self, left_square):
         t_yolo = time.time()
@@ -173,14 +186,41 @@ class CameraNode(Node):
         
         # Convert to float and scale (StereoBM returns 16-bit fixed-point)
         disparity = disparity.astype(np.float32) / 16.0
-        
+
         return time.time() - t_disp, disparity
     
+    def compute_depth(self, disparity_value):
+        focal_length = self.left_proj_matrix[0, 0]
+        baseline = -self.right_proj_matrix[0, 3] / focal_length
+
+        # Avoid division by zero
+        if disparity_value < 1e-6:
+            disparity_value = 1e-6
+        depth = ((focal_length * baseline) / disparity_value)
+        depth = depth / 1000.0
+        
+        #self.get_logger().info(f'Disparity Value: {depth}')
+
+        return depth
+    
+    def mono_depth_estimator(self, h, w):
+        a = 2.329;
+        b = -0.0001485;
+        c = 0.8616;
+        d = -0.8479e-05;
+
+        bbox_area = h * w
+
+        return a * np.exp(b * bbox_area) + c * np.exp(d * bbox_area)
+    
     def filter_disparity(self, disparity, bbox):
-        """Filter disparity values within bounding box"""
+        """Filter disparity values within bounding box and convert to depth."""
         x, y, w, h = bbox.astype(int)
-        disparity_roi = disparity[y-h//2:y+h//2, x-w//2:x+w//2]
-        return np.mean(disparity_roi) * 1.0
+        # Select ROI: adjust indices as needed for your ROI
+        disparity_roi = disparity[y - h//2:y + h//2, x - w//2:x + w//2]
+        mean_disp = np.mean(disparity_roi)
+        # Compute depth using stereo conversion formula
+        return self.compute_depth(mean_disp)
 
     def camera_callback(self):
         timing = {}
@@ -215,10 +255,10 @@ class CameraNode(Node):
         detection_msg = self.tracker.select_target(detections, yellow_goal_mode = None if self.ball_search_mode else self.yellow_goal_mode)
         
         if detection_msg is not None:
-            detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
-            #self.pub_detections.publish(detection_msg)
+            #detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
+            detection_msg.depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
             self.pub_detections.publish(Float64MultiArray(data=[detection_msg.bbox[0], detection_msg.bbox[1], detection_msg.depth]))
-
+ 
         # Publish debug view with drawn on detection, depth, class, and track id
         debug_view = left_frame.copy()
         if detection_msg is not None:

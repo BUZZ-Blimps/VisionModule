@@ -10,7 +10,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'camera_number',
-            default_value='4',
+            default_value='12',
             description='Camera device number'
         ),
         DeclareLaunchArgument(
