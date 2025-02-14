@@ -44,27 +44,29 @@ class CameraNode(Node):
             return
 
         self._setup_camera()
-        self._load_calibration()
 
         # Initialize YOLO models.
         self.ball_rknn = YOLO(self.ball_model_file, task='detect')
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
-        # Compute rectification maps.
-        self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
-            self.left_camera_matrix,
-            self.left_distortion_coefficients,
-            None,
-            None,
-            (640, 480),
-            cv2.CV_32FC1)
-        self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
-            self.right_camera_matrix,
-            self.right_distortion_coefficients,
-            None,
-            None,
-            (640, 480),
-            cv2.CV_32FC1)
+        if not self.undistort_camera:
+            self._load_calibration()
+
+            # Compute rectification maps.
+            self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
+                self.left_camera_matrix,
+                self.left_distortion_coefficients,
+                None,
+                None,
+                (640, 480),
+                cv2.CV_32FC1)
+            self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
+                self.right_camera_matrix,
+                self.right_distortion_coefficients,
+                None,
+                None,
+                (640, 480),
+                cv2.CV_32FC1)
 
         # Initialize stereo matcher.
         self._setup_stereo_matcher()
@@ -162,7 +164,7 @@ class CameraNode(Node):
 
     def _setup_stereo_matcher(self):
         """Initialize and configure the stereo matcher."""
-        self.stereo = cv2.StereoBM.create(numDisparities=64, blockSize=9)
+        self.stereo = cv2.StereoBM.create(numDisparities=64, blockSize=15)
         self.stereo.setPreFilterSize(5)
         self.stereo.setPreFilterCap(61)
         self.stereo.setMinDisparity(0)
@@ -222,7 +224,7 @@ class CameraNode(Node):
         """
         t_start = time.time()
         selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
+        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.5)[0]
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
@@ -234,10 +236,14 @@ class CameraNode(Node):
 
         t_start = time.time()
         
-        # Rectify images.
-        left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
-        right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
-        
+        if not self.undistort_camera:
+            # Rectify images.
+            left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
+            right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
+        else:
+            left_rectified = left_frame
+            right_rectified = right_frame
+
         left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
         right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
         disparity = self.stereo.compute(left_gray, right_gray)
@@ -251,7 +257,7 @@ class CameraNode(Node):
         focal_length = self.left_proj_matrix[0, 0]
         baseline = -self.right_proj_matrix[0, 3] / focal_length
         disparity_value = max(disparity_value, 1e-6)
-        depth = ((focal_length * baseline) / disparity_value) / 1000.0
+        depth = ((focal_length * baseline) / disparity_value)
         return depth
 
     def mono_depth_estimator(self, h, w):
@@ -267,10 +273,19 @@ class CameraNode(Node):
 
     def filter_disparity(self, disparity, bbox):
         """
-        Filter disparity values within a bounding box and compute depth.
+        Filter disparity values within a bounding box, clamping to image bounds,
+        and compute the depth.
+        Assumes bbox = [center_x, center_y, width, height].
         """
         x, y, w, h = bbox.astype(int)
-        disparity_roi = disparity[y - h // 2:y + h // 2, x - w // 2:x + w // 2]
+        # Compute ROI boundaries and clamp them to the image size.
+        x_min = max(x - w // 2, 0)
+        x_max = min(x + w // 2, disparity.shape[1])
+        y_min = max(y - h // 2, 0)
+        y_max = min(y + h // 2, disparity.shape[0])
+        disparity_roi = disparity[y_min:y_max, x_min:x_max]
+        if disparity_roi.size == 0:
+            return float('inf')  # or some default value
         mean_disp = np.mean(disparity_roi)
         return self.compute_depth(mean_disp)
 
@@ -298,6 +313,7 @@ class CameraNode(Node):
         #t_yolo, detections = self.run_model(left_frame)
 
         t_disp, disparity = self.compute_disparity(left_frame, right_frame)
+
         #t_disp, disparity = disparity_future.result()
         t_yolo, detections = yolo_future.result()
         timing['disparity'] = t_disp * 1000
@@ -310,7 +326,9 @@ class CameraNode(Node):
         )
         if detection_msg is not None:
             # Here you could choose between mono_depth_estimator or filter_disparity.
-            detection_msg.depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+            detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
+            #detection_msg.depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],

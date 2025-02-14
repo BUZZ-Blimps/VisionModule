@@ -55,6 +55,11 @@ def generate_launch_description():
             default_value='frames/',
             description='Location to save frames'
         ),
+        DeclareLaunchArgument(
+            'undistort_camera',
+            default_value='true',
+            description='Enable camera undistortion'
+        ),
         Node(
             package='blimp_vision',
             executable='blimp_vision_node',
@@ -67,7 +72,8 @@ def generate_launch_description():
                 'goal_model_file': LaunchConfiguration('goal_model_file'),
                 'verbose_mode': LaunchConfiguration('verbose_mode'),
                 'save_frames': LaunchConfiguration('save_frames'),
-                'save_location': LaunchConfiguration('save_location')
+                'save_location': LaunchConfiguration('save_location'),
+                'undistort_camera': LaunchConfiguration('undistort_camera')
             }],
             output='screen'
         )
