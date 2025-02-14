@@ -263,6 +263,11 @@ class CameraNode(Node):
         right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
         disparity = self.stereo.compute(left_gray, right_gray)
         disparity = disparity.astype(np.float32) / 16.0
+
+        # Publish grid depth values.
+        grid_depths = self.compute_grid_depths(disparity)
+        self.pub_grid.publish(Float64MultiArray(data=grid_depths))
+
         return time.time() - t_start, disparity
 
     def compute_depth(self, disparity_value):
@@ -383,10 +388,6 @@ class CameraNode(Node):
         # Run YOLO and compute disparity concurrently.
         yolo_future = self.thread_pool.submit(self.run_model, left_frame)
         t_disp, disparity = self.compute_disparity(left_frame, right_frame)
-
-        # Publish grid depth values.
-        grid_depths = self.compute_grid_depths(disparity)
-        self.pub_grid.publish(Float64MultiArray(data=grid_depths))
 
         t_yolo, detections = yolo_future.result()
         timing['disparity'] = t_disp * 1000
