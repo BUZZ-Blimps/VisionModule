@@ -386,18 +386,24 @@ class CameraNode(Node):
         timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
 
         # Run YOLO and compute disparity concurrently.
-        yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-        t_disp, disparity = self.compute_disparity(left_frame, right_frame)
+        
+        disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
+    
+        #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
+        #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
+        t_yolo, detections = self.run_model(left_frame) 
 
-        t_yolo, detections = yolo_future.result()
-        timing['disparity'] = t_disp * 1000
-        timing['yolo_inference'] = t_yolo * 1000
-
-        # Process detections.
         detection_msg = self.tracker.select_target(
             detections,
             yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
         )
+
+        t_disp, disparity = disp_future.result()
+
+        timing['disparity'] = t_disp * 1000
+        timing['yolo_inference'] = t_yolo * 1000
+
+        # Process detections.
         if detection_msg is not None:
             disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
             regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
