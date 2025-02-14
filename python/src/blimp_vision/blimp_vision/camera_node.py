@@ -52,7 +52,7 @@ class CameraNode(Node):
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
         if not self.undistort_camera:
-            # Compute rectification maps.
+            # Compute rectification maps if undistortion is not desired.
             self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
                 self.left_camera_matrix,
                 self.left_distortion_coefficients,
@@ -68,7 +68,7 @@ class CameraNode(Node):
                 (640, 480),
                 cv2.CV_32FC1)
 
-        # Initialize stereo matcher.
+        # Initialize stereo matcher with SGBM.
         self._setup_stereo_matcher()
 
         # Other variables.
@@ -83,7 +83,7 @@ class CameraNode(Node):
         # Publishers.
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
         self.pub_detections = self.create_publisher(Float64MultiArray, 'targets', 10)
-        # New publisher for the 3x3 grid of distance values.
+        # Publisher for the 3x3 grid of distance values.
         self.pub_grid = self.create_publisher(Float64MultiArray, 'grid_distances', 10)
 
         # Subscribers.
@@ -167,18 +167,29 @@ class CameraNode(Node):
             self.get_logger().error(f'Failed to load calibration files: {e}')
 
     def _setup_stereo_matcher(self):
-        """Initialize and configure the stereo matcher."""
-        self.stereo = cv2.StereoBM.create(numDisparities=64, blockSize=15)
-        self.stereo.setPreFilterSize(5)
-        self.stereo.setPreFilterCap(61)
-        self.stereo.setMinDisparity(0)
-        self.stereo.setNumDisparities(64)
-        self.stereo.setBlockSize(5)
-        self.stereo.setTextureThreshold(507)
-        self.stereo.setUniquenessRatio(5)
-        self.stereo.setSpeckleWindowSize(100)
-        self.stereo.setSpeckleRange(32)
-        self.stereo.setDisp12MaxDiff(1)
+        """Initialize and configure the stereo matcher using SGBM."""
+        minDisparity = 0
+        numDisparities = 64  # must be divisible by 16
+        blockSize = 5
+        P1 = 8 * 1 * blockSize**2   # 8 * 25 = 200
+        P2 = 32 * 1 * blockSize**2  # 32 * 25 = 800
+        disp12MaxDiff = 1
+        uniquenessRatio = 10
+        speckleWindowSize = 100
+        speckleRange = 32
+        mode = cv2.STEREO_SGBM_MODE_SGBM_3WAY
+        self.stereo = cv2.StereoSGBM_create(
+            minDisparity=minDisparity,
+            numDisparities=numDisparities,
+            blockSize=blockSize,
+            P1=P1,
+            P2=P2,
+            disp12MaxDiff=disp12MaxDiff,
+            uniquenessRatio=uniquenessRatio,
+            speckleWindowSize=speckleWindowSize,
+            speckleRange=speckleRange,
+            mode=mode
+        )
 
     def _setup_gstreamer(self):
         """Configure and launch the GStreamer pipeline for streaming."""
@@ -232,6 +243,12 @@ class CameraNode(Node):
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
+        """
+        Compute disparity between two images using SGBM.
+        If undistortion is enabled, the raw frames are remapped using rectification maps.
+        
+        :return: (computation_time, disparity map)
+        """
         t_start = time.time()
         
         if self.undistort_camera:
@@ -239,7 +256,6 @@ class CameraNode(Node):
             left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
             right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
         else:
-            # Use the raw frames
             left_rectified = left_frame
             right_rectified = right_frame
 
@@ -248,7 +264,6 @@ class CameraNode(Node):
         disparity = self.stereo.compute(left_gray, right_gray)
         disparity = disparity.astype(np.float32) / 16.0
         return time.time() - t_start, disparity
-
 
     def compute_depth(self, disparity_value):
         """
@@ -276,16 +291,43 @@ class CameraNode(Node):
         """
         Filter disparity values within a bounding box and compute the depth.
         Assumes bbox = [center_x, center_y, width, height].
+        
+        For ball mode: remove inf and nan values, then select only the values within the middle IQR.
+        For goal mode: apply a mask (0.6w x 0.6h) centered in the ROI and use those values.
         """
         x, y, w, h = bbox.astype(int)
         x_min = max(x - w // 2, 0)
         x_max = min(x + w // 2, disparity.shape[1])
         y_min = max(y - h // 2, 0)
         y_max = min(y + h // 2, disparity.shape[0])
-        disparity_roi = disparity[y_min:y_max, x_min:x_max]
-        if disparity_roi.size == 0:
+        roi = disparity[y_min:y_max, x_min:x_max]
+        # Filter out inf and nan values
+        valid = roi[np.isfinite(roi)]
+        if valid.size == 0:
             return float('inf')
-        mean_disp = np.mean(disparity_roi)
+        if self.ball_search_mode:
+            # Use middle IQR of the valid disparity values.
+            q1 = np.percentile(valid, 25)
+            q3 = np.percentile(valid, 75)
+            filtered = valid[(valid >= q1) & (valid <= q3)]
+            if filtered.size == 0:
+                filtered = valid
+        else:
+            # Goal mode: use only the central mask of ROI (0.6w x 0.6h)
+            roi_h, roi_w = roi.shape
+            center_x = roi_w // 2
+            center_y = roi_h // 2
+            mask_w = int(0.6 * roi_w)
+            mask_h = int(0.6 * roi_h)
+            mask_x_min = max(center_x - mask_w // 2, 0)
+            mask_x_max = min(center_x + mask_w // 2, roi_w)
+            mask_y_min = max(center_y - mask_h // 2, 0)
+            mask_y_max = min(center_y + mask_h // 2, roi_h)
+            central_roi = roi[mask_y_min:mask_y_max, mask_x_min:mask_x_max]
+            filtered = central_roi[np.isfinite(central_roi)]
+            if filtered.size == 0:
+                filtered = valid
+        mean_disp = np.mean(filtered)
         return self.compute_depth(mean_disp)
 
     def compute_grid_depths(self, disparity):
