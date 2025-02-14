@@ -284,8 +284,13 @@ class CameraNode(Node):
         b = -0.0001485
         c = 0.8616
         d = -0.8479e-05
-        bbox_area = h * w
-        return a * np.exp(b * bbox_area) + c * np.exp(d * bbox_area)
+        
+        if self.ball_search_mode:
+            small_side = np.min([h, w])
+            bbox_area = small_side**2
+            return a * np.exp(b * bbox_area) + c * np.exp(d * bbox_area)
+        else:
+            return np.inf
 
     def filter_disparity(self, disparity, bbox):
         """
@@ -393,7 +398,10 @@ class CameraNode(Node):
             yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
         )
         if detection_msg is not None:
-            detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
+            disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
+            regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+
+            detection_msg.depth = np.min([disp_depth, regr_depth])
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
