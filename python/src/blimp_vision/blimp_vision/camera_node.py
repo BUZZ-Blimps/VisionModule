@@ -51,7 +51,7 @@ class CameraNode(Node):
         self.ball_rknn = YOLO(self.ball_model_file, task='detect')
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
-        if not self.undistort_camera:
+        if self.undistort_camera:
             # Compute rectification maps if undistortion is not desired.
             self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
                 self.left_camera_matrix,
@@ -239,7 +239,7 @@ class CameraNode(Node):
         """
         t_start = time.time()
         selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.5)[0]
+        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.35)[0]
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
@@ -408,12 +408,16 @@ class CameraNode(Node):
             disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
             regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
 
-            detection_msg.depth = np.min([disp_depth, regr_depth])
+            detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 1600 else 100.0
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
-                detection_msg.depth
+                detection_msg.depth,
+                detection_msg.track_id*1.0,
+                (not self.ball_search_mode) * 1.0
             ]))
+        else:
+            self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0]))
 
         # Prepare debug view.
         debug_view = left_frame.copy()
