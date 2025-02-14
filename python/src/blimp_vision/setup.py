@@ -40,7 +40,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'blimp_vision_node = blimp_vision.blimp_vision_node:main',
+            'blimp_vision_node = blimp_vision.camera_node:main',
         ],
     },
 )
