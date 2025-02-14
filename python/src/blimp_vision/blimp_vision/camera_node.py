@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Module defining the CameraNode, which captures images, computes disparity,
-runs YOLO detection in parallel, and streams the debug view via GStreamer.
+runs YOLO detection in parallel, streams the debug view via GStreamer, and
+publishes a 3x3 grid of distance values for the entire frame.
 """
 
 import os
@@ -44,14 +45,13 @@ class CameraNode(Node):
             return
 
         self._setup_camera()
+        self._load_calibration()
 
         # Initialize YOLO models.
         self.ball_rknn = YOLO(self.ball_model_file, task='detect')
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
         if not self.undistort_camera:
-            self._load_calibration()
-
             # Compute rectification maps.
             self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
                 self.left_camera_matrix,
@@ -83,6 +83,8 @@ class CameraNode(Node):
         # Publishers.
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
         self.pub_detections = self.create_publisher(Float64MultiArray, 'targets', 10)
+        # New publisher for the 3x3 grid of distance values.
+        self.pub_grid = self.create_publisher(Float64MultiArray, 'grid_distances', 10)
 
         # Subscribers.
         bool_qos = QoSProfile(
@@ -230,19 +232,14 @@ class CameraNode(Node):
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
-        """
-        Compute disparity between rectified images using StereoBM.
-        
-        :return: (computation_time, disparity map)
-        """
-
         t_start = time.time()
         
-        if not self.undistort_camera:
-            # Rectify images.
+        if self.undistort_camera:
+            # Use rectification maps if undistortion is enabled.
             left_rectified = cv2.remap(left_frame, self.left_map1, self.left_map2, cv2.INTER_LINEAR)
             right_rectified = cv2.remap(right_frame, self.right_map1, self.right_map2, cv2.INTER_LINEAR)
         else:
+            # Use the raw frames
             left_rectified = left_frame
             right_rectified = right_frame
 
@@ -252,14 +249,16 @@ class CameraNode(Node):
         disparity = disparity.astype(np.float32) / 16.0
         return time.time() - t_start, disparity
 
+
     def compute_depth(self, disparity_value):
         """
         Compute depth using the stereo camera model.
+        The result is converted to meters.
         """
         focal_length = self.left_proj_matrix[0, 0]
         baseline = -self.right_proj_matrix[0, 3] / focal_length
         disparity_value = max(disparity_value, 1e-6)
-        depth = ((focal_length * baseline) / disparity_value)
+        depth = ((focal_length * baseline) / disparity_value) / 1000.0
         return depth
 
     def mono_depth_estimator(self, h, w):
@@ -275,24 +274,49 @@ class CameraNode(Node):
 
     def filter_disparity(self, disparity, bbox):
         """
-        Filter disparity values within a bounding box, clamping to image bounds,
-        and compute the depth.
+        Filter disparity values within a bounding box and compute the depth.
         Assumes bbox = [center_x, center_y, width, height].
         """
         x, y, w, h = bbox.astype(int)
-        # Compute ROI boundaries and clamp them to the image size.
         x_min = max(x - w // 2, 0)
         x_max = min(x + w // 2, disparity.shape[1])
         y_min = max(y - h // 2, 0)
         y_max = min(y + h // 2, disparity.shape[0])
         disparity_roi = disparity[y_min:y_max, x_min:x_max]
         if disparity_roi.size == 0:
-            return float('inf')  # or some default value
+            return float('inf')
         mean_disp = np.mean(disparity_roi)
         return self.compute_depth(mean_disp)
 
+    def compute_grid_depths(self, disparity):
+        """
+        Divide the disparity map into a 3x3 grid and compute a representative depth (in meters)
+        for each region.
+        
+        :param disparity: The full disparity map.
+        :return: A list of 9 depth values.
+        """
+        h, w = disparity.shape
+        grid_depths = []
+        cell_h = h // 3
+        cell_w = w // 3
+        for i in range(3):
+            for j in range(3):
+                y_min = i * cell_h
+                y_max = (i + 1) * cell_h if i < 2 else h
+                x_min = j * cell_w
+                x_max = (j + 1) * cell_w if j < 2 else w
+                region = disparity[y_min:y_max, x_min:x_max]
+                if region.size == 0:
+                    depth = float('inf')
+                else:
+                    mean_disp = np.mean(region)
+                    depth = self.compute_depth(mean_disp)
+                grid_depths.append(depth)
+        return grid_depths
+
     def camera_callback(self):
-        """Main callback: capture, process, and stream frames while publishing metrics."""
+        """Main callback: capture, process, stream frames, and publish metrics and grid distances."""
         timing = {}
         t_total = time.time()
         t_preprocess_start = time.time()
@@ -309,14 +333,14 @@ class CameraNode(Node):
 
         timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
 
-        # Run YOLO and disparity computations concurrently.
-        #disparity_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
+        # Run YOLO and compute disparity concurrently.
         yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-        #t_yolo, detections = self.run_model(left_frame)
-
         t_disp, disparity = self.compute_disparity(left_frame, right_frame)
 
-        #t_disp, disparity = disparity_future.result()
+        # Publish grid depth values.
+        grid_depths = self.compute_grid_depths(disparity)
+        self.pub_grid.publish(Float64MultiArray(data=grid_depths))
+
         t_yolo, detections = yolo_future.result()
         timing['disparity'] = t_disp * 1000
         timing['yolo_inference'] = t_yolo * 1000
@@ -327,10 +351,7 @@ class CameraNode(Node):
             yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
         )
         if detection_msg is not None:
-            # Here you could choose between mono_depth_estimator or filter_disparity.
             detection_msg.depth = self.filter_disparity(disparity, detection_msg.bbox)
-            #detection_msg.depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
