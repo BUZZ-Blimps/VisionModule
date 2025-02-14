@@ -107,13 +107,14 @@ class CameraNode(Node):
             namespace='',
             parameters=[
                 ('camera_number', 0),
-                ('device_path', '/dev/video1'),
+                ('device_path', '/dev/video0'),
                 ('calibration_path', 'calibration/'),
                 ('ball_model_file', 'models/ball.xml'),
                 ('goal_model_file', 'models/goal.xml'),
                 ('verbose_mode', False),
                 ('save_frames', False),
-                ('save_location', 'frames/')
+                ('save_location', 'frames/'),
+                ('undistort_camera', True)
             ]
         )
 
@@ -126,6 +127,7 @@ class CameraNode(Node):
         self.verbose_mode = self.get_parameter('verbose_mode').value
         self.save_frames = self.get_parameter('save_frames').value
         self.save_location = self.get_parameter('save_location').value
+        self.undistort_camera = self.get_parameter('undistort_camera').value
 
     def _setup_camera(self):
         """Configure the camera properties."""
