@@ -274,7 +274,7 @@ class CameraNode(Node):
         baseline = -self.right_proj_matrix[0, 3] / focal_length
         disparity_value = max(disparity_value, 1e-6)
         depth = ((focal_length * baseline) / disparity_value) / 1000.0
-        return depth
+        return depth * 100
 
     def mono_depth_estimator(self, h, w):
         """
