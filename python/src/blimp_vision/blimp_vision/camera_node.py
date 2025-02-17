@@ -28,7 +28,9 @@ from blimp_vision.ball_tracker import BallTracker
 
 # Initialize GStreamer once at startup.
 Gst.init(None)
-
+cv2.setUseOptimized(True)
+cv2.setNumThreads(2)
+print(f'OpenCV enabled?: {cv2.ocl.haveOpenCL()}')
 
 class CameraNode(Node):
     """ROS2 Node for vision processing using YOLO and stereo disparity."""
@@ -225,7 +227,7 @@ class CameraNode(Node):
 
     def state_callback(self, msg):
         self.state = msg.data[0]
-        self.ball_search_mode = (self.state == 0)
+        self.ball_search_mode = (self.state in [0, 1, 2, 3])
 
     def goal_color_callback(self, msg):
         self.yellow_goal_mode = msg.data
