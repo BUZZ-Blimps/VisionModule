@@ -48,43 +48,12 @@ class CameraNode(Node):
 
         self._setup_camera()
         self._load_calibration()
+        self._setup_stereorectification()
+        self._setup_stereo_matcher()
 
         # Initialize YOLO models.
         self.ball_rknn = YOLO(self.ball_model_file, task='detect')
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
-
-        if self.undistort_camera:
-            R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
-                self.left_camera_matrix,
-                self.left_distortion_coefficients,
-                self.right_camera_matrix,
-                self.right_distortion_coefficients,
-                (640, 480),
-                self.right_rotation_matrix,
-                self.right_translation_vector,
-                flags=cv2.CALIB_ZERO_DISPARITY,
-                alpha = 0
-            )
-
-            # Compute rectification maps if undistortion is not desired.
-            self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
-                self.left_camera_matrix,
-                self.left_distortion_coefficients,
-                R1,
-                P1,
-                (640, 480),
-                cv2.CV_32FC1)
-                
-            self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
-                self.right_camera_matrix,
-                self.right_distortion_coefficients,
-                R2,
-                P2,
-                (640, 480),
-                cv2.CV_32FC1)
-
-        # Initialize stereo matcher with SGBM.
-        self._setup_stereo_matcher()
 
         # Other variables.
         self.bridge = CvBridge()
@@ -98,15 +67,10 @@ class CameraNode(Node):
         # Publishers.
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
         self.pub_detections = self.create_publisher(Float64MultiArray, 'targets', 10)
-        # Publisher for the 3x3 grid of distance values.
         self.pub_grid = self.create_publisher(Float64MultiArray, 'grid_distances', 10)
 
         # Subscribers.
-        bool_qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1,
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        bool_qos = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1, reliability=QoSReliabilityPolicy.RELIABLE, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         self.state_sub = self.create_subscription(Int64MultiArray, 'state', self.state_callback, 10)
         self.goalcolor_sub = self.create_subscription(Bool, 'goal_color', self.goal_color_callback, bool_qos)
 
@@ -189,6 +153,36 @@ class CameraNode(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to load calibration files: {e}')
 
+    def _setup_stereorectification(self):
+        R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
+            self.left_camera_matrix,
+            self.left_distortion_coefficients,
+            self.right_camera_matrix,
+            self.right_distortion_coefficients,
+            (640, 480),
+            self.right_rotation_matrix,
+            self.right_translation_vector,
+            flags=cv2.CALIB_ZERO_DISPARITY,
+            alpha = 0
+        )
+
+        # Compute rectification maps if undistortion is not desired.
+        self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
+            self.left_camera_matrix,
+            self.left_distortion_coefficients,
+            R1,
+            P1,
+            (640, 480),
+            cv2.CV_32FC1)
+            
+        self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
+            self.right_camera_matrix,
+            self.right_distortion_coefficients,
+            R2,
+            P2,
+            (640, 480),
+            cv2.CV_32FC1)
+
     def _setup_stereo_matcher(self):
         """Initialize and configure the stereo matcher using SGBM."""
         minDisparity = 0
@@ -262,7 +256,7 @@ class CameraNode(Node):
         """
         t_start = time.time()
         selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.35)[0]
+        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
@@ -298,11 +292,11 @@ class CameraNode(Node):
         Compute depth using the stereo camera model.
         The result is converted to meters.
         """
-        focal_length = self.left_proj_matrix[0, 0]
-        baseline = -self.right_proj_matrix[0, 3] / focal_length
+        focal_length = self.left_camera_matrix[0, 0]
+        baseline = -self.right_translation_vector[0, 0]
         disparity_value = max(disparity_value, 1e-6)
-        depth = ((focal_length * baseline) / disparity_value) / 1000.0
-        return depth * 100
+        depth = ((focal_length * baseline) / disparity_value)
+        return depth
 
     def mono_depth_estimator(self, h, w):
         """
@@ -356,10 +350,14 @@ class CameraNode(Node):
             mask_x_max = min(center_x + mask_w // 2, roi_w)
             mask_y_min = max(center_y - mask_h // 2, 0)
             mask_y_max = min(center_y + mask_h // 2, roi_h)
-            central_roi = roi[mask_y_min:mask_y_max, mask_x_min:mask_x_max]
-            filtered = central_roi[np.isfinite(central_roi)]
-            if filtered.size == 0:
-                filtered = valid
+            
+            roi_mask = np.ones_like(roi, dtype=bool)
+            roi_mask[mask_y_min:mask_y_max, mask_x_min:mask_x_max] = False
+
+            # Combine with a finite value check.
+            valid_mask = np.isfinite(roi) & roi_mask
+            filtered = roi[valid_mask]
+
         mean_disp = np.mean(filtered)
         return self.compute_depth(mean_disp)
 

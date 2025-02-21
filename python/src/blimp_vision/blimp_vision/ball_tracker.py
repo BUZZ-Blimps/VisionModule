@@ -83,7 +83,7 @@ class BallTracker:
             for box, track_id in zip(boxes, track_ids):
                 center_distance = self.calculate_center_distance(box)
                 area = self.calculate_area(box)
-                if area < 100:  # Ignore very small detections.
+                if area < 40:  # Ignore very small detections.
                     continue
                 score = (center_distance / area) * 100  # Lower score is better.
                 if score < best_score:
