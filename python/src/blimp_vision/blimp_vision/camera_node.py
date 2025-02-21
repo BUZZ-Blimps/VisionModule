@@ -429,7 +429,7 @@ class CameraNode(Node):
             disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
             regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
 
-            detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 1600 else 100.0
+            detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 400 else 100.0
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
