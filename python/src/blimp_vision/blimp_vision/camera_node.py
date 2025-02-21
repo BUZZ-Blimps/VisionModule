@@ -54,19 +54,32 @@ class CameraNode(Node):
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
         if self.undistort_camera:
+            R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
+                self.left_camera_matrix,
+                self.left_distortion_coefficients,
+                self.right_camera_matrix,
+                self.right_distortion_coefficients,
+                (640, 480),
+                self.right_rotation_matrix,
+                self.right_translation_vector,
+                flags=cv2.CALIB_ZERO_DISPARITY,
+                alpha = 0
+            )
+
             # Compute rectification maps if undistortion is not desired.
             self.left_map1, self.left_map2 = cv2.initUndistortRectifyMap(
                 self.left_camera_matrix,
                 self.left_distortion_coefficients,
-                None,
-                None,
+                R1,
+                P1,
                 (640, 480),
                 cv2.CV_32FC1)
+                
             self.right_map1, self.right_map2 = cv2.initUndistortRectifyMap(
                 self.right_camera_matrix,
                 self.right_distortion_coefficients,
-                None,
-                None,
+                R2,
+                P2,
                 (640, 480),
                 cv2.CV_32FC1)
 
@@ -142,27 +155,35 @@ class CameraNode(Node):
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def _load_calibration(self):
-        """Load camera calibration parameters for left and right cameras."""
+        """Load camera calibration parameters for left and right cameras using the new approach."""
         try:
             # Left camera calibration.
-            left_file = f'camera{self.camera_number}_elp_left.yaml'
+            left_file = f'camera{self.camera_number}_left.yaml'
             left_path = os.path.join(self.calibration_path, left_file)
             with open(left_path, 'r') as file:
                 left_data = yaml.safe_load(file)
-                self.left_camera_matrix = np.array(left_data['camera_matrix']['data']).reshape(3, 3)
+                self.left_camera_matrix = np.array(left_data['camera_matrix']['data']).reshape(
+                    left_data['camera_matrix']['rows'], left_data['camera_matrix']['cols'])
                 self.left_distortion_coefficients = np.array(left_data['distortion_coefficients']['data'])
-                self.left_rect_matrix = np.array(left_data['rectification_matrix']['data']).reshape(3, 3)
-                self.left_proj_matrix = np.array(left_data['projection_matrix']['data']).reshape(3, 4)
+                self.left_rotation_matrix = np.array(left_data['rotation_matrix']['data']).reshape(
+                    left_data['rotation_matrix']['rows'], left_data['rotation_matrix']['cols'])
+                self.left_translation_vector = np.array(left_data['translation_vector']['data']).reshape(
+                    left_data['translation_vector']['rows'], 1)
+                self.left_image_size = tuple(left_data['image_size'])
 
             # Right camera calibration.
-            right_file = f'camera{self.camera_number}_elp_right.yaml'
+            right_file = f'camera{self.camera_number}_right.yaml'
             right_path = os.path.join(self.calibration_path, right_file)
             with open(right_path, 'r') as file:
                 right_data = yaml.safe_load(file)
-                self.right_camera_matrix = np.array(right_data['camera_matrix']['data']).reshape(3, 3)
+                self.right_camera_matrix = np.array(right_data['camera_matrix']['data']).reshape(
+                    right_data['camera_matrix']['rows'], right_data['camera_matrix']['cols'])
                 self.right_distortion_coefficients = np.array(right_data['distortion_coefficients']['data'])
-                self.right_rect_matrix = np.array(right_data['rectification_matrix']['data']).reshape(3, 3)
-                self.right_proj_matrix = np.array(right_data['projection_matrix']['data']).reshape(3, 4)
+                self.right_rotation_matrix = np.array(right_data['rotation_matrix']['data']).reshape(
+                    right_data['rotation_matrix']['rows'], right_data['rotation_matrix']['cols'])
+                self.right_translation_vector = np.array(right_data['translation_vector']['data']).reshape(
+                    right_data['translation_vector']['rows'], 1)
+                self.right_image_size = tuple(right_data['image_size'])
 
             self.get_logger().info('Successfully loaded camera calibration files')
         except Exception as e:
@@ -171,14 +192,14 @@ class CameraNode(Node):
     def _setup_stereo_matcher(self):
         """Initialize and configure the stereo matcher using SGBM."""
         minDisparity = 0
-        numDisparities = 64  # must be divisible by 16
-        blockSize = 5
+        numDisparities = 32  # must be divisible by 16
+        blockSize = 12
         P1 = 8 * 1 * blockSize**2   # 8 * 25 = 200
         P2 = 32 * 1 * blockSize**2  # 32 * 25 = 800
         disp12MaxDiff = 1
-        uniquenessRatio = 10
-        speckleWindowSize = 100
-        speckleRange = 32
+        uniquenessRatio = 0
+        speckleWindowSize = 0
+        speckleRange = 0
         mode = cv2.STEREO_SGBM_MODE_SGBM_3WAY
         self.stereo = cv2.StereoSGBM_create(
             minDisparity=minDisparity,
