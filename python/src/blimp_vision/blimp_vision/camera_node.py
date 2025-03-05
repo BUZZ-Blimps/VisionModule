@@ -87,7 +87,7 @@ class CameraNode(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('camera_number', 0),
+                ('camera_number', 4),
                 ('device_path', '/dev/video0'),
                 ('calibration_path', 'calibration/'),
                 ('ball_model_file', 'models/ball.xml'),
@@ -95,7 +95,10 @@ class CameraNode(Node):
                 ('verbose_mode', False),
                 ('save_frames', False),
                 ('save_location', 'frames/'),
-                ('undistort_camera', True)
+                ('undistort_camera', True),
+                ('goal_circle_height', 1.13),
+                ('goal_square_height', 1.17),
+                ('goal_triangle_height', 1.50),
             ]
         )
 
@@ -109,6 +112,10 @@ class CameraNode(Node):
         self.save_frames = self.get_parameter('save_frames').value
         self.save_location = self.get_parameter('save_location').value
         self.undistort_camera = self.get_parameter('undistort_camera').value
+        self.goal_circle_height = self.get_parameter('goal_circle_height').value
+        self.goal_square_height = self.get_parameter('goal_square_height').value
+        self.goal_triangle_height = self.get_parameter('goal_triangle_height').value
+
 
     def _setup_camera(self):
         """Configure the camera properties."""
@@ -148,6 +155,9 @@ class CameraNode(Node):
                 self.right_translation_vector = np.array(right_data['translation_vector']['data']).reshape(
                     right_data['translation_vector']['rows'], 1)
                 self.right_image_size = tuple(right_data['image_size'])
+
+            # Use the vertical focal length (the [1,1] element) from the calibration file.
+            self.goal_vertical_focal = self.left_camera_matrix[1, 1]
 
             self.get_logger().info('Successfully loaded camera calibration files')
         except Exception as e:
@@ -426,19 +436,31 @@ class CameraNode(Node):
 
         # Process detections.
         if detection_msg is not None:
-            disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
-            regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+            if self.ball_search_mode:
+                disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
+                regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+                detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 400 else 100.0
+            else:
+                # Goal detection mode: use the calibrated vertical focal length and real goal height.
+                # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
+                obj_class = detection_msg.obj_class.lower()
+                if "circle" in obj_class:
+                    real_height = self.goal_circle_height
+                elif "triangle" in obj_class:
+                    real_height = self.goal_triangle_height
+                elif "square" in obj_class:
+                    real_height = self.goal_square_height
 
-            detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 400 else 100.0
+                # Use the goal_vertical_focal loaded from calibration.
+                detection_msg.depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+            
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
                 detection_msg.depth,
-                detection_msg.track_id*1.0,
+                detection_msg.track_id * 1.0,
                 (not self.ball_search_mode) * 1.0
             ]))
-        else:
-            self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0]))
 
         # Prepare debug view.
         debug_view = left_frame.copy()

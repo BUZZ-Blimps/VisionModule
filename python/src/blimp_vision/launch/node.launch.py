@@ -8,7 +8,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'camera_number',
-            default_value='12',
+            default_value='4',
             description='Camera device number'
         ),
         DeclareLaunchArgument(
@@ -60,6 +60,22 @@ def generate_launch_description():
             default_value='true',
             description='Enable camera undistortion'
         ),
+        DeclareLaunchArgument(
+            'goal_circle_height',
+            default_value='1.13',
+            description='Height of the goal circle (m)'
+        ),
+        DeclareLaunchArgument(
+            'goal_square_height',
+            default_value='1.17',
+            description='Height of the goal square (m)'
+        ),
+        DeclareLaunchArgument(
+            'goal_triangle_height',
+            default_value='1.50',
+            description='Height of the goal triangle (m)'
+        ),
+
         Node(
             package='blimp_vision',
             executable='blimp_vision_node',
@@ -73,7 +89,10 @@ def generate_launch_description():
                 'verbose_mode': LaunchConfiguration('verbose_mode'),
                 'save_frames': LaunchConfiguration('save_frames'),
                 'save_location': LaunchConfiguration('save_location'),
-                'undistort_camera': LaunchConfiguration('undistort_camera')
+                'undistort_camera': LaunchConfiguration('undistort_camera'),
+                'goal_circle_height': LaunchConfiguration('goal_circle_height'),
+                'goal_square_height': LaunchConfiguration('goal_square_height'),
+                'goal_triangle_height': LaunchConfiguration('goal_triangle_height')
             }],
             output='screen'
         )
