@@ -41,7 +41,7 @@ def generate_launch_description():
                     'models/goal/goal_v11n_rknn_model'
                 ]),
                 'verbose_mode': 'false',
-                'save_frames': 'false',
+                'save_frames': 'true',
                 'save_location': 'frames/'
             }.items()
         )

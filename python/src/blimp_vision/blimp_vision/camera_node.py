@@ -83,6 +83,9 @@ class CameraNode(Node):
         # Set up GStreamer streaming pipeline.
         self._setup_gstreamer()
 
+        # Set up Video Recorder if flag enabled.
+        self._setup_videosaver()
+
     def _declare_parameters(self):
         self.declare_parameters(
             namespace='',
@@ -158,6 +161,15 @@ class CameraNode(Node):
 
             # Use the vertical focal length (the [1,1] element) from the calibration file.
             self.goal_vertical_focal = self.left_camera_matrix[1, 1]
+
+            self.h_fov = 2 * np.arctan(((self.left_image_size[1] / 2) / self.left_camera_matrix[0][0]))
+            self.v_fov = 2 * np.arctan(((self.left_image_size[0] / 2) / self.left_camera_matrix[1][1]))
+
+            self.fx = self.left_camera_matrix[0][0]
+            self.fy = self.left_camera_matrix[1][1]
+
+            self.cx = self.left_camera_matrix[0][2]
+            self.cy = self.left_camera_matrix[1][2]
 
             self.get_logger().info('Successfully loaded camera calibration files')
         except Exception as e:
@@ -245,6 +257,23 @@ class CameraNode(Node):
 
         self.stream_timestamp = 0.0
         self.frame_duration = 1.0 / 12.0
+
+    def _setup_videosaver(self):
+        if self.save_frames:
+            # Ensure the save directory exists.
+            os.makedirs(self.save_location, exist_ok=True)
+            # Capture an initial frame to determine the frame size.
+            ret, frame = self.capture_frame()
+            if ret:
+                # Left frame dimensions: half the width of the full frame.
+                frame_width = frame.shape[1] // 2
+                frame_height = frame.shape[0]
+                fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                video_path = os.path.join(self.save_location, f'{time.time()}.avi')
+                self.video_writer = cv2.VideoWriter(video_path, fourcc, 12, (frame_width, frame_height))
+                self.get_logger().info(f'Video recording initialized: {video_path}')
+            else:
+                self.get_logger().error('Failed to capture initial frame for video writer initialization')
 
     def capture_frame(self):
         """Capture a frame from the camera."""
@@ -398,6 +427,14 @@ class CameraNode(Node):
                 grid_depths.append(depth)
         return grid_depths
 
+    def get_bbox_theta_offsets(self, bbox, depth):
+        offset_x = bbox[0] - self.cx
+        offset_y = bbox[1] - self.cy
+        
+        theta_x = np.arctan(offset_x / self.fx)
+        theta_y = np.arctan(offset_y / self.fy)
+        return theta_x, theta_y
+
     def camera_callback(self):
         """Main callback: capture, process, stream frames, and publish metrics and grid distances."""
         timing = {}
@@ -439,7 +476,7 @@ class CameraNode(Node):
             if self.ball_search_mode:
                 disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
                 regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-                detection_msg.depth = np.min([disp_depth, regr_depth]) if (detection_msg.bbox[2]*detection_msg.bbox[3]) > 400 else 100.0
+                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
             else:
                 # Goal detection mode: use the calibrated vertical focal length and real goal height.
                 # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
@@ -450,17 +487,23 @@ class CameraNode(Node):
                     real_height = self.goal_triangle_height
                 elif "square" in obj_class:
                     real_height = self.goal_square_height
-
+                raw_goal_height = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+                raw_depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
                 # Use the goal_vertical_focal loaded from calibration.
-                detection_msg.depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+                detection_msg.depth = 0.31804 * np.exp(0.59 * raw_depth) + 1.424
             
+            theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
             self.pub_detections.publish(Float64MultiArray(data=[
                 detection_msg.bbox[0],
                 detection_msg.bbox[1],
                 detection_msg.depth,
                 detection_msg.track_id * 1.0,
-                (not self.ball_search_mode) * 1.0
+                (not self.ball_search_mode) * 1.0,
+                theta_x,
+                theta_y
             ]))
+
+
 
         # Prepare debug view.
         debug_view = left_frame.copy()
@@ -496,6 +539,9 @@ class CameraNode(Node):
         perf_msg.fps = (1 / perf_msg.total_time) * 1000
         self.pub_performance.publish(perf_msg)
 
+        if self.save_frames:
+            self.video_writer.write(left_frame)
+
 
 def main(args=None):
     import rclpy
@@ -506,6 +552,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if node.save_frames:
+            node.video_writer.release()
         node.thread_pool.shutdown(wait=True)
         node.destroy_node()
         rclpy.shutdown()

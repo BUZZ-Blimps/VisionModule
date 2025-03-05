@@ -26,7 +26,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([base_launch_file]),
             launch_arguments={
-                'camera_number': '6',
+                'camera_number': '13',
                 'device_path': '/dev/video0',
                 'calibration_path': PathJoinSubstitution([
                     get_package_share_directory('blimp_vision'),
