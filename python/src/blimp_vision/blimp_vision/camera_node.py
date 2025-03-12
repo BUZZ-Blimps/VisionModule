@@ -280,8 +280,16 @@ class CameraNode(Node):
         return self.cap.read()
 
     def state_callback(self, msg):
+        old_state = self.state
+
         self.state = msg.data[0]
+
         self.ball_search_mode = (self.state in [0, 1, 2, 3])
+
+        if old_state is not self.state and self.ball_search_mode:
+            self.get_logger().info('Blimp switched from goal search to ball search, Switching vision model...')
+        elif old_state is not self.state and not self.ball_search_mode:
+            self.get_logger().info('Blimp switched from ball search to goal search, Switching vision model...')
 
     def goal_color_callback(self, msg):
         self.yellow_goal_mode = msg.data
@@ -295,7 +303,7 @@ class CameraNode(Node):
         """
         t_start = time.time()
         selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
+        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.5)[0]
         return time.time() - t_start, results
 
     def compute_disparity(self, left_frame, right_frame):
@@ -507,13 +515,26 @@ class CameraNode(Node):
 
         # Prepare debug view.
         debug_view = left_frame.copy()
+        img_h, img_w = debug_view.shape[:2]
+        center_img = (img_w // 2, img_h // 2)
+        # Draw horizontal line
+        cv2.line(debug_view, (center_img[0] - 10, center_img[1]), (center_img[0] + 10, center_img[1]), (0, 0, 255), 2)
+        # Draw vertical line
+        cv2.line(debug_view, (center_img[0], center_img[1] - 10), (center_img[0], center_img[1] + 10), (0, 0, 255), 2)
+
         if detection_msg is not None:
             x, y, w, h = detection_msg.bbox.astype(int)
-            cv2.rectangle(debug_view, (x - w // 2, y - h // 2),
-                          (x + w // 2, y + h // 2), (0, 255, 0), 2)
+            # Define the bounding box corners (assuming x,y is the center of the box)
+            top_left = (x - w // 2, y - h // 2)
+            bottom_right = (x + w // 2, y + h // 2)
+            cv2.rectangle(debug_view, top_left, bottom_right, (0, 255, 0), 2)
+            
+            # Draw a marker (filled circle) at the center of the bounding box
+            cv2.circle(debug_view, (x, y), 3, (255, 0, 0), -1)
+            
             cv2.putText(debug_view,
                         f'{detection_msg.obj_class} {detection_msg.track_id} {detection_msg.depth:.1f}m',
-                        (x - w // 2, y - h // 2 - 10),
+                        (top_left[0], top_left[1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Stream the processed frame.
