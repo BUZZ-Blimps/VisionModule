@@ -63,6 +63,7 @@ class CameraNode(Node):
         self.track_history = defaultdict(list)
         self.tracker = BallTracker(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) / 2,
                                    self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.state = 0
 
         # Publishers.
         self.pub_performance = self.create_publisher(PerformanceMetrics, 'performance_metrics', 10)
