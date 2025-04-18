@@ -485,7 +485,7 @@ class CameraNode(Node):
             if self.ball_search_mode:
                 disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
                 regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
+                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 50.0) else 100.0
             else:
                 # Goal detection mode: use the calibrated vertical focal length and real goal height.
                 # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
@@ -508,11 +508,13 @@ class CameraNode(Node):
                 detection_msg.depth,
                 detection_msg.track_id * 1.0,
                 (not self.ball_search_mode) * 1.0,
-                theta_x,
-                theta_y
+                theta_x, theta_y,
+                detection_msg.bbox[2], detection_msg.bbox[3]
             ]))
 
-
+        #nothing founded
+        else:
+            self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
 
         # Prepare debug view.
         debug_view = left_frame.copy()
