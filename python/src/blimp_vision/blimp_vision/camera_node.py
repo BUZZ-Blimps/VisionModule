@@ -303,9 +303,31 @@ class CameraNode(Node):
         :return: (inference_time, detection results)
         """
         t_start = time.time()
-        selected_model = self.ball_rknn if self.ball_search_mode else self.goal_rknn
-        results = selected_model.track(left_frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=0.5)[0]
+        
+        if self.ball_search_mode:
+            selected_model = self.ball_rknn
+            # Only detect class 0 for the ball model
+            results = selected_model.track(
+                left_frame,
+                persist=True,
+                tracker="bytetrack.yaml",
+                verbose=False,
+                conf=0.65,
+                classes=[0]  # Only class 0
+            )[0]
+        else:
+            selected_model = self.goal_rknn
+            # Detect all classes for the goal model (do not use 'classes' argument)
+            results = selected_model.track(
+                left_frame,
+                persist=True,
+                tracker="bytetrack.yaml",
+                verbose=False,
+                conf=0.65
+            )[0]
+        
         return time.time() - t_start, results
+
 
     def compute_disparity(self, left_frame, right_frame):
         """
@@ -485,7 +507,8 @@ class CameraNode(Node):
             if self.ball_search_mode:
                 disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
                 regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 50.0) else 100.0
+                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
+
             else:
                 # Goal detection mode: use the calibrated vertical focal length and real goal height.
                 # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
