@@ -74,11 +74,14 @@ class BallTracker:
             if yellow_goal_mode is not None:
                 if yellow_goal_mode:
                     boxes = boxes[detections.boxes.cls.cpu() < self.goal_cutoff_index]
+                    track_ids = track_ids[detections.boxes.cls.cpu() < self.goal_cutoff_index]
                 else:
                     boxes = boxes[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
+                    track_ids = track_ids[detections.boxes.cls.cpu() >= self.goal_cutoff_index]
             else:
                 boxes = boxes[detections.boxes.cls.cpu() < 2]
-
+                track_ids = track_ids[detections.boxes.cls.cpu() < 2]
+                
             best_score = float('inf')
             for box, track_id in zip(boxes, track_ids):
                 center_distance = self.calculate_center_distance(box)
