@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Module defining the CameraNode, which captures images, computes disparity,
@@ -239,21 +240,20 @@ class CameraNode(Node):
         port = 5000 + device_num
 
         pipeline_str = (
-            "appsrc name=mysource is-live=true block=true format=time "
-            "! videoconvert "
-            "! videoscale "
-            "! video/x-raw,format=I420,width=320,height=240 "
-            "! mpph264enc name=hwenc "
-            "! h264parse config-interval=1 "
-            "! mpegtsmux "
-            "! udpsink host=192.168.0.200 port={port}"
+            "appsrc name=mysource emit-signals=True is-live=True format=GST_FORMAT_TIME "
+            "caps=video/x-raw,format=BGR,width=640,height=480,framerate=12/1 ! "
+            "videoconvert ! videoscale ! video/x-raw,format=I420,width=640,height=480 ! "
+            "mpph264enc name=hwenc ! "
+            "h264parse ! rtph264pay config-interval=1 pt=96 ! "
+            "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
+            "udpsink host=192.168.0.200 port={port} sync=false"
         ).format(port=port)
 
         self.get_logger().info("Launching GStreamer pipeline:\n" + pipeline_str)
         self.pipeline = Gst.parse_launch(pipeline_str)
         self.appsrc = self.pipeline.get_by_name("mysource")
-        caps = Gst.Caps.from_string("video/x-raw,format=BGR,width=320,height=240,framerate=12/1")
-        self.appsrc.set_property("caps", caps)
+        #caps = Gst.Caps.from_string("video/x-raw,width=640,height=480,framerate=12/1")
+        #self.appsrc.set_property("caps", caps)
         self.pipeline.set_state(Gst.State.PLAYING)
 
         self.stream_timestamp = 0.0
@@ -564,7 +564,7 @@ class CameraNode(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Stream the processed frame.
-        processed = cv2.resize(debug_view, (320, 240))
+        processed = cv2.resize(debug_view, (640, 480))
         data = processed.tobytes()
         buf = Gst.Buffer.new_allocate(None, len(data), None)
         buf.fill(0, data)
