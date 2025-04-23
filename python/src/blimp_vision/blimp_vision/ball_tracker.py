@@ -22,7 +22,7 @@ class BallTracker:
         self.frames_without_target = 0
         self.goal_cutoff_index = 3.0
         self.track_history = defaultdict(int)  # Track consecutive detections
-        self.min_consecutive_detections = 1  # Minimum consecutive detections required
+        self.min_consecutive_detections = 0  # Minimum consecutive detections required
         self.max_history_size = 30  # Maximum size of track history to prevent memory growth
 
     def calculate_center_distance(self, detection):
