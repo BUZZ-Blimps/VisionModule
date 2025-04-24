@@ -75,6 +75,11 @@ def generate_launch_description():
             default_value='1.50',
             description='Height of the goal triangle (m)'
         ),
+        DeclareLaunchArgument(
+            'input_video_path',
+            default_value="",
+            description='Path to video to use instead of camera'
+        ),
 
         Node(
             package='blimp_vision',
@@ -92,7 +97,8 @@ def generate_launch_description():
                 'undistort_camera': LaunchConfiguration('undistort_camera'),
                 'goal_circle_height': LaunchConfiguration('goal_circle_height'),
                 'goal_square_height': LaunchConfiguration('goal_square_height'),
-                'goal_triangle_height': LaunchConfiguration('goal_triangle_height')
+                'goal_triangle_height': LaunchConfiguration('goal_triangle_height'),
+                'input_video_path': LaunchConfiguration('input_video_path')
             }],
             output='screen'
         )

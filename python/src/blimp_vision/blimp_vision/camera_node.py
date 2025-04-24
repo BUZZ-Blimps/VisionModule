@@ -43,10 +43,16 @@ class CameraNode(Node):
         self._get_parameters()
 
         # Initialize capture device.
-        self.cap = cv2.VideoCapture(self.device_path)
-        if not self.cap.isOpened():
-            self.get_logger().error(f'Failed to open camera at {self.device_path}')
-            return
+        if self.input_video_path == "":
+            self.cap = cv2.VideoCapture(self.device_path)
+            if not self.cap.isOpened():
+                self.get_logger().error(f'Failed to open camera at {self.device_path}')
+                return
+        else:
+            self.cap = cv2.VideoCapture(self.input_video_path)
+            if not self.cap.isOpened():
+                self.get_logger().error(f'Failed to open camera at {self.input_video_path}')
+                return
 
         self._setup_camera()
         self._load_calibration()
@@ -105,6 +111,7 @@ class CameraNode(Node):
                 ('goal_circle_height', 1.13),
                 ('goal_square_height', 1.17),
                 ('goal_triangle_height', 1.50),
+                ('input_video_path', ""),
             ]
         )
 
@@ -121,6 +128,7 @@ class CameraNode(Node):
         self.goal_circle_height = self.get_parameter('goal_circle_height').value
         self.goal_square_height = self.get_parameter('goal_square_height').value
         self.goal_triangle_height = self.get_parameter('goal_triangle_height').value
+        self.input_video_path = self.get_parameter('input_video_path').value
 
 
     def _setup_camera(self):
