@@ -276,7 +276,8 @@ class CameraNode(Node):
             ret, frame = self.capture_frame()
             if ret:
                 # Left frame dimensions: half the width of the full frame.
-                frame_width = frame.shape[1] // 2
+                # frame_width = frame.shape[1] // 2
+                frame_width = frame.shape[1]
                 frame_height = frame.shape[0]
                 fourcc = cv2.VideoWriter_fourcc(*'XVID')
                 video_path = os.path.join(self.save_location, f'{time.time()}.avi')
@@ -729,7 +730,8 @@ class CameraNode(Node):
         self.pub_performance.publish(perf_msg)
 
         if self.save_frames:
-            self.video_writer.write(left_frame)
+            # self.video_writer.write(left_frame)
+            self.video_writer.write(frame)
 
 
 def main(args=None):
