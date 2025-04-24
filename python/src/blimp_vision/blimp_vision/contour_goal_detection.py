@@ -57,8 +57,6 @@ def contour_find_goal(left_frame, yellow_goal_mode):
     dilated = cv2.dilate(mask, kernel, iterations=3)
 
     # Find contours
-    image_contours = frame.copy()
-    image_bounding_boxes = frame.copy()
     contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     num_contours = len(contours)
     contour_areas = np.zeros((num_contours,1))
@@ -73,7 +71,7 @@ def contour_find_goal(left_frame, yellow_goal_mode):
         contour_score_circle = evaluate_contour_circle_quality(mask, contour)
         contour_score = max(contour_score_poly, contour_score_circle)
 
-        if(contour_score >= score_threshold):            
+        if(contour_score >= score_threshold):
 
             polygon = approximate_polygon(contour, polygon_N)
             if polygon is None or len(polygon) != polygon_N:

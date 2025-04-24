@@ -27,6 +27,7 @@ from ultralytics import YOLO
 
 from blimp_vision.ball_tracker import BallTracker
 from blimp_vision.contour_goal_detection import contour_find_goal
+from blimp_vision.contour_ball_detection import contour_find_ball
 
 # Initialize GStreamer once at startup.
 Gst.init(None)
@@ -514,44 +515,69 @@ class CameraNode(Node):
         right_frame = frame[:, frame_width:]
 
         if self.ball_search_mode:
-            # Search for balls using YOLO model
-        
-            timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
-            disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
-        
-            #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-            #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
-            t_yolo, detections = self.run_model_ball(left_frame)
+            detected = False
 
-            detection_msg = self.tracker.select_target(
-                detections,
-                yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
-            )
+            # Try contour detection
+            contour_detection_msg = contour_find_ball(left_frame)
+            if not detected and contour_detection_msg is not None:
+                timing['preprocessing'] = 0.0
+                timing['disparity'] = 0.0
+                timing['yolo_inference'] = 0.0
 
-            t_disp, disparity = disp_future.result()
-
-            timing['disparity'] = t_disp * 1000
-            timing['yolo_inference'] = t_yolo * 1000
-
-            # Process detections.
-            if detection_msg is not None:
-                disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
-                regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-                detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
-
-                theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
-
+                theta_x, theta_y = self.get_bbox_theta_offsets(contour_detection_msg.bbox, contour_detection_msg.depth)
                 self.pub_detections.publish(Float64MultiArray(data=[
-                    detection_msg.bbox[0],
-                    detection_msg.bbox[1],
-                    detection_msg.depth,
-                    detection_msg.track_id * 1.0,
+                    contour_detection_msg.bbox[0],
+                    contour_detection_msg.bbox[1],
+                    contour_detection_msg.depth,
+                    contour_detection_msg.track_id * 1.0,
                     (not self.ball_search_mode) * 1.0,
                     theta_x, theta_y,
-                    detection_msg.bbox[2], detection_msg.bbox[3]
+                    contour_detection_msg.bbox[2], contour_detection_msg.bbox[3]
                 ]))
-            #nothing founded
-            else:
+                detected = True
+                detection_msg = contour_detection_msg
+
+            if not detected:
+                # Search for balls using YOLO model
+        
+                timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
+                disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
+            
+                #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
+                #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
+                t_yolo, detections = self.run_model_ball(left_frame)
+
+                detection_msg = self.tracker.select_target(
+                    detections,
+                    yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
+                )
+
+                t_disp, disparity = disp_future.result()
+
+                timing['disparity'] = t_disp * 1000
+                timing['yolo_inference'] = t_yolo * 1000
+
+                # Process detections.
+                if detection_msg is not None:
+                    disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
+                    regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+                    detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
+
+                    theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
+
+                    self.pub_detections.publish(Float64MultiArray(data=[
+                        detection_msg.bbox[0],
+                        detection_msg.bbox[1],
+                        detection_msg.depth,
+                        detection_msg.track_id * 1.0,
+                        (not self.ball_search_mode) * 1.0,
+                        theta_x, theta_y,
+                        detection_msg.bbox[2], detection_msg.bbox[3]
+                    ]))
+                    detection = True
+
+            if not detected:
+                #nothing founded
                 self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
 
         else:
@@ -561,6 +587,9 @@ class CameraNode(Node):
             # Try using contour detection
             contour_detection_msg = contour_find_goal(left_frame, self.yellow_goal_mode)
             if not detected and contour_detection_msg is not None:
+                timing['preprocessing'] = 0.0
+                timing['disparity'] = 0.0
+                timing['yolo_inference'] = 0.0
                 bbox_area = contour_detection_msg.bbox[2]*contour_detection_msg.bbox[3]
                 if bbox_area >= 8000: # pixel area to start trusting contours over YOLO
                     # Trust contour detection
@@ -630,6 +659,9 @@ class CameraNode(Node):
             
             # Go back to coutour
             if not detected and contour_detection_msg is not None:
+                timing['preprocessing'] = 0.0
+                timing['disparity'] = 0.0
+                timing['yolo_inference'] = 0.0
                 # Trust contour detection
                 if self.tracker.current_tracked_id is not None:
                     contour_detection_msg.track_id = self.tracker.current_tracked_id
