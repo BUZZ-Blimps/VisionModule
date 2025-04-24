@@ -12,8 +12,10 @@ if [ "$1" != "" ]; then
     timeout=2
     ping $hostname -c 1 -W $timeout > /dev/null
     if [ $? == 0 ]; then
+        ssh $user@$hostname 'systemctl stop catching_blimp'
         rsync -vrt ./src/blimp_vision $user@$hostname:$user_dir/ros2_ws/src
         rsync -vrt ./src/blimp_vision_msgs $user@$hostname:$user_dir/ros2_ws/src
+        ssh $user@$hostname 'cd ros2_ws && source /opt/ros/humble/setup.bash && colcon build --packages-select blimp_vision_msgs && colcon build --packages-select blimp_vision'
     else
         echo "$hostname is offline :("
     fi
