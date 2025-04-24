@@ -5,7 +5,7 @@ from blimp_vision_msgs.msg import Detection
 # Define parameters
 orange_hsv = {
     "h_min": 0,
-    "h_max": 37,
+    "h_max": 25,
     "s_min": 124,
     "s_max": 255,
     "v_min": 240,
@@ -87,9 +87,12 @@ def contour_find_goal(left_frame, yellow_goal_mode):
             detection_msg = Detection()
             detection_msg.class_id = 1
             detection_msg.obj_class = "Shape"
-            detection_msg.bbox = [cx, cy, w, h]
-            detection_msg.depth = -1
-            detection_msg.confidence = -1
+            detection_msg.bbox[0] = cx
+            detection_msg.bbox[1] = cy
+            detection_msg.bbox[2] = w
+            detection_msg.bbox[3] = h
+            detection_msg.depth = -1.0
+            detection_msg.confidence = -1.0
             detection_msg.track_id = -1
 
             return detection_msg

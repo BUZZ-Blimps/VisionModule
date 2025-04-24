@@ -607,11 +607,11 @@ class CameraNode(Node):
             else:
                 # Try using contour detection
                 detection_msg = contour_find_goal(left_frame, self.yellow_goal_mode)
-                if self.tracker.current_tracked_id is not None:
-                    detection_msg.track_id = self.tracker.current_tracked_id
 
-                theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
                 if detection_msg is not None:
+                    if self.tracker.current_tracked_id is not None:
+                        detection_msg.track_id = self.tracker.current_tracked_id
+                    theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
                     self.pub_detections.publish(Float64MultiArray(data=[
                         detection_msg.bbox[0],
                         detection_msg.bbox[1],

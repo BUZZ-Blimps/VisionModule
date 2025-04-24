@@ -42,7 +42,8 @@ def generate_launch_description():
                 ]),
                 'verbose_mode': 'false',
                 'save_frames': 'true',
-                'save_location': 'frames/'
+                'save_location': 'frames/',
+                'input_video_path': ""
             }.items()
         )
     ])
