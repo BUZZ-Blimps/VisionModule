@@ -4,7 +4,7 @@ from blimp_vision_msgs.msg import Detection
 
 # Define parameters
 purple_hsv = {
-    "h_min": 116,
+    "h_min": 110,
     "h_max": 159,
     "s_min": 67,
     "s_max": 255,
@@ -12,8 +12,18 @@ purple_hsv = {
     "v_max": 188
 }
 
+# purple_hsv = {
+#     "h_min": 116,
+#     "h_max": 159,
+#     "s_min": 88,
+#     "s_max": 255,
+#     "v_min": 119,
+#     "v_max": 200
+# }
+
 def contour_find_ball(left_frame):
     frame = left_frame
+    height = frame.shape[0]
 
     # Convert to HSV
     image_HSV = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -50,7 +60,8 @@ def contour_find_ball(left_frame):
     for i in range(num_contours):
         contour_index = int(sorted_indices[i])
         contour = contours[contour_index]
-        contour_score_circle = evaluate_contour_circle_quality(mask, contour)
+        min_area = 450
+        contour_score_circle = evaluate_contour_circle_quality(mask, contour, min_area)
         contour_score = contour_score_circle
 
         if(contour_score >= score_threshold):
@@ -60,18 +71,20 @@ def contour_find_ball(left_frame):
             cx = x + w/2
             cy = y + h/2
 
-            detection_msg = Detection()
-            detection_msg.class_id = 1
-            detection_msg.obj_class = "Shape"
-            detection_msg.bbox[0] = cx
-            detection_msg.bbox[1] = cy
-            detection_msg.bbox[2] = w
-            detection_msg.bbox[3] = h
-            detection_msg.depth = -1.0
-            detection_msg.confidence = -1.0
-            detection_msg.track_id = -1
+            # To prevent len flare (from seeing lights), just ignore detections in top portion of screen
+            if cy > height/4:
+                detection_msg = Detection()
+                detection_msg.class_id = 1
+                detection_msg.obj_class = "Shape"
+                detection_msg.bbox[0] = cx
+                detection_msg.bbox[1] = cy
+                detection_msg.bbox[2] = w
+                detection_msg.bbox[3] = h
+                detection_msg.depth = -1.0
+                detection_msg.confidence = -1.0
+                detection_msg.track_id = -1
 
-            return detection_msg
+                return detection_msg
 
 
 def evaluate_contour_circle_quality(mask, contour, min_area=500, max_aspect_ratio=1.5):

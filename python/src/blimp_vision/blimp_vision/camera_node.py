@@ -513,6 +513,8 @@ class CameraNode(Node):
         frame_width = frame.shape[1] // 2
         left_frame = frame[:, :frame_width]
         right_frame = frame[:, frame_width:]
+        
+        detection_msg = None
 
         if self.ball_search_mode:
             detected = False
@@ -537,47 +539,50 @@ class CameraNode(Node):
                 detected = True
                 detection_msg = contour_detection_msg
 
-            if not detected:
-                # Search for balls using YOLO model
+            # if not detected:
+            #     # Search for balls using YOLO model
         
-                timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
-                disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
+            #     timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
+            #     disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
             
-                #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-                #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
-                t_yolo, detections = self.run_model_ball(left_frame)
+            #     #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
+            #     #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
+            #     t_yolo, detections = self.run_model_ball(left_frame)
 
-                detection_msg = self.tracker.select_target(
-                    detections,
-                    yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
-                )
+            #     detection_msg = self.tracker.select_target(
+            #         detections,
+            #         yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
+            #     )
 
-                t_disp, disparity = disp_future.result()
+            #     t_disp, disparity = disp_future.result()
 
-                timing['disparity'] = t_disp * 1000
-                timing['yolo_inference'] = t_yolo * 1000
+            #     timing['disparity'] = t_disp * 1000
+            #     timing['yolo_inference'] = t_yolo * 1000
 
-                # Process detections.
-                if detection_msg is not None:
-                    disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
-                    regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-                    detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
+            #     # Process detections.
+            #     if detection_msg is not None:
+            #         disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
+            #         regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
+            #         detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
 
-                    theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
+            #         theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
 
-                    self.pub_detections.publish(Float64MultiArray(data=[
-                        detection_msg.bbox[0],
-                        detection_msg.bbox[1],
-                        detection_msg.depth,
-                        detection_msg.track_id * 1.0,
-                        (not self.ball_search_mode) * 1.0,
-                        theta_x, theta_y,
-                        detection_msg.bbox[2], detection_msg.bbox[3]
-                    ]))
-                    detection = True
+            #         self.pub_detections.publish(Float64MultiArray(data=[
+            #             detection_msg.bbox[0],
+            #             detection_msg.bbox[1],
+            #             detection_msg.depth,
+            #             detection_msg.track_id * 1.0,
+            #             (not self.ball_search_mode) * 1.0,
+            #             theta_x, theta_y,
+            #             detection_msg.bbox[2], detection_msg.bbox[3]
+            #         ]))
+            #         detection = True
 
             if not detected:
                 #nothing founded
+                timing['preprocessing'] = 0.0
+                timing['disparity'] = 0.0
+                timing['yolo_inference'] = 0.0
                 self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
 
         else:
