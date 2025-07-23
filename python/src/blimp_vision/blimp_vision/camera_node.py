@@ -27,7 +27,7 @@ from ultralytics import YOLO
 
 from blimp_vision.ball_tracker import BallTracker
 from blimp_vision.contour_goal_detection import contour_find_goal
-from blimp_vision.blob_detection import contour_find_ball
+from blimp_vision.blob_detector import BlobDetectorClass
 
 # Initialize GStreamer once at startup.
 Gst.init(None)
@@ -520,7 +520,8 @@ class CameraNode(Node):
             detected = False
 
             # Try contour detection
-            contour_detection_msg = contour_find_ball(left_frame)
+            blobDetector = BlobDetectorClass()
+            contour_detection_msg =  blobDetector.contour_find_ball(left_frame)
             if not detected and contour_detection_msg is not None:
                 timing['preprocessing'] = 0.0
                 timing['disparity'] = 0.0
