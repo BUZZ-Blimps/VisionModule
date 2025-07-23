@@ -27,7 +27,7 @@ from ultralytics import YOLO
 
 from blimp_vision.ball_tracker import BallTracker
 from blimp_vision.contour_goal_detection import contour_find_goal
-from blimp_vision.contour_ball_detection import contour_find_ball
+from blimp_vision.blob_detection import contour_find_ball
 
 # Initialize GStreamer once at startup.
 Gst.init(None)
