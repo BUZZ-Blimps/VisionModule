@@ -64,6 +64,9 @@ class CameraNode(Node):
         self.ball_rknn = YOLO(self.ball_model_file, task='detect')
         self.goal_rknn = YOLO(self.goal_model_file, task='detect')
 
+        # Blob detector
+        self.blobDetector = BlobDetectorClass()
+
         # Other variables.
         self.bridge = CvBridge()
         self.ball_search_mode = True
@@ -520,8 +523,7 @@ class CameraNode(Node):
             detected = False
 
             # Try contour detection
-            blobDetector = BlobDetectorClass()
-            contour_detection_msg =  blobDetector.contour_find_ball(left_frame)
+            contour_detection_msg =  self.blobDetector.contour_find_ball(left_frame)
             if not detected and contour_detection_msg is not None:
                 timing['preprocessing'] = 0.0
                 timing['disparity'] = 0.0

@@ -87,28 +87,18 @@ class BlobDetectorClass:
     # True if area > min area and percent of enclosing circle filled > min percent filled
     def isValidArea(self,contour):
         cont_area = cv.contourArea(contour) 
-        (x,y), radius = cv.minEnclosingCircle(contour)
+        (self.x,self.y), radius = cv.minEnclosingCircle(contour)
         encl_area = math.pi * radius * radius
         if (cont_area/encl_area)*100 > self.min_percent_filled and cont_area >= self.min_area:
             return True
         return False
-    
-    def getFrame(self):
-        ret, frame = self.cap.read()
-        height, width, n = frame.shape
-        frame = frame[:, :width//2]
-        cv.imshow('frame',frame)
-        return frame
-    
-    def killCap(self):
-        self.cap.release()
 
     def contour_find_ball(self,frame):
 
         ######### Blob detection #########
 
         if self.show_time:
-            start_time = time.time()
+            self.start_time = time.time()
 
         # Convert to HSV
         hsv_frame = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
@@ -161,9 +151,6 @@ class BlobDetectorClass:
         combined_mask = cv.erode(combined_mask, erode_kernel)
         combined_mask = cv.dilate(combined_mask, dilate_kernel)
 
-        # Create masked frame
-        masked_frame = cv.bitwise_and(frame, frame, mask = combined_mask)
-
         # Create and draw contours on masked frame
         ret, thresh = cv.threshold(combined_mask, 127, 255, 0)
         contours, hierarchy = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
@@ -188,10 +175,10 @@ class BlobDetectorClass:
         # Print blob detection time
         if self.show_time and self.start_time is not None:
             end_time = time.time()
-            elapsed_time1 = end_time - start_time
+            elapsed_time1 = end_time - self.start_time
             print('\nBlob detection: ', elapsed_time1)
 
-            start_time = time.time()
+            self.start_time = time.time()
 
         ######## Optical flow ########
 
@@ -215,38 +202,38 @@ class BlobDetectorClass:
                     good_new = p1[st==1]
                     good_old = self.p0[st==1]
 
-                # Calc velocity
-                feat_count = 0
-                self.v_x_s = 0
-                self.v_y_s = 0
-                for i, (new, old) in enumerate(zip(good_new, good_old)):
-                    a, b = new.ravel()
-                    c, d = old.ravel()
-                    self.v_x_s += c - a
-                    self.v_y_s += b - d
-                    feat_count += 1
+                    # Calc velocity
+                    feat_count = 0
+                    self.v_x_s = 0
+                    self.v_y_s = 0
+                    for i, (new, old) in enumerate(zip(good_new, good_old)):
+                        a, b = new.ravel()
+                        c, d = old.ravel()
+                        self.v_x_s += c - a
+                        self.v_y_s += b - d
+                        feat_count += 1
 
-                if not feat_count == 0:
-                    self.v_x_s /= feat_count
-                    self.v_y_s /= feat_count
+                    if not feat_count == 0:
+                        self.v_x_s /= feat_count
+                        self.v_y_s /= feat_count
 
-                    self.v_x_s *= self.v_scale
-                    self.v_y_s *= self.v_scale
+                        self.v_x_s *= self.v_scale
+                        self.v_y_s *= self.v_scale
 
-                    if abs(self.v_x_s) > 5:
-                        self.v_x_s = 0
+                        if abs(self.v_x_s) > 5:
+                            self.v_x_s = 0
 
-                    if abs(self.v_y_s) > 5:
-                        self.v_y_s = 0
+                        if abs(self.v_y_s) > 5:
+                            self.v_y_s = 0
 
-                # Now update the previous frame and previous points
-                self.old_gray = frame_gray.copy()
-                self.p0 = good_new.reshape(-1, 1, 2)
+                    # Now update the previous frame and previous points
+                    self.old_gray = frame_gray.copy()
+                    self.p0 = good_new.reshape(-1, 1, 2)
 
         # Print optical flow time
         if self.show_time and self.start_time is not None:
             end_time = time.time()
-            elapsed_time2 = end_time - start_time
+            elapsed_time2 = end_time - self.start_time
             print('Optical flow: ', elapsed_time2)
 
             start_time = time.time()
@@ -290,7 +277,7 @@ class BlobDetectorClass:
             self.x_prev = x_hat
 
             if self.no_detect_count > 100 or (self.x > -1 and (abs(self.x_est - self.x) > 10 and abs(self.y_est - self.y) > 10)):
-                kalman_initialized = False
+                self.kalman_initialized = False
                 self.x_est = -1
                 self.y_est = -1
 
@@ -319,7 +306,7 @@ class BlobDetectorClass:
         # Time for kalman filter and total time
         if self.show_time and self.start_time is not None:
             end_time = time.time()
-            elapsed_time3 = end_time - start_time
+            elapsed_time3 = end_time - self.start_time
             print('Kalman: ', elapsed_time3)
             total_time = elapsed_time1 + elapsed_time2 + elapsed_time3
             print('Total: ', total_time)
@@ -329,19 +316,20 @@ class BlobDetectorClass:
         # cv.circle(frame, (int(x_est),int(y_est)), int(radius), (0, 0, 255), 3)
 
         ######## Return detection ########
-        diameter = self.radius * 2
+        if self.x_est > -1:
+            diameter = self.radius * 2
 
-        detection_msg = Detection()
-        detection_msg.class_id = 1
-        detection_msg.obj_class = "Shape"
-        detection_msg.bbox[0] = self.x_est
-        detection_msg.bbox[1] = self.y_est
-        detection_msg.bbox[2] = diameter
-        detection_msg.bbox[3] = diameter
-        detection_msg.depth = -1.0
-        detection_msg.confidence = -1.0
-        detection_msg.track_id = -1
+            detection_msg = Detection()
+            detection_msg.class_id = 1
+            detection_msg.obj_class = "Shape"
+            detection_msg.bbox[0] = self.x_est
+            detection_msg.bbox[1] = self.y_est
+            detection_msg.bbox[2] = diameter
+            detection_msg.bbox[3] = diameter
+            detection_msg.depth = -1.0
+            detection_msg.confidence = -1.0
+            detection_msg.track_id = -1
 
-        return detection_msg
+            return detection_msg
 
 
