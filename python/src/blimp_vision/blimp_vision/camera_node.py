@@ -259,7 +259,7 @@ class CameraNode(Node):
             "mpph264enc name=hwenc ! "
             "h264parse ! rtph264pay config-interval=1 pt=96 ! "
             "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
-            "udpsink host=192.168.0.200 port={port} sync=false"
+            "udpsink host=192.168.0.211 port={port} sync=false"
         ).format(port=port)
 
         self.get_logger().info("Launching GStreamer pipeline:\n" + pipeline_str)
