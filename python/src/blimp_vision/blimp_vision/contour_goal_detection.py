@@ -23,6 +23,13 @@ yellow_hsv = {
 
 score_threshold = 0.2
 polygon_N = 4
+include_orange = True
+include_yellow = True
+dilate_iterations = 3
+goal_min_area = 500
+goal_max_aspect_ratio = 1.5
+goal_polygon_inner_scale = 0.6
+goal_circle_inner_scale = 0.6
 
 
 ## Goal detection function
@@ -35,8 +42,12 @@ def contour_find_goal(left_frame, yellow_goal_mode):
 
     # Get HSV bounds
     if yellow_goal_mode:
+        if not include_yellow:
+            return None
         hsv_bounds = yellow_hsv
     else:
+        if not include_orange:
+            return None
         hsv_bounds = orange_hsv
 
     h_min = hsv_bounds["h_min"]
@@ -54,7 +65,7 @@ def contour_find_goal(left_frame, yellow_goal_mode):
     
     # Dilate mask
     kernel = np.ones((3,3), np.uint8)
-    dilated = cv2.dilate(mask, kernel, iterations=3)
+    dilated = cv2.dilate(mask, kernel, iterations=dilate_iterations)
 
     # Find contours
     contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -67,8 +78,21 @@ def contour_find_goal(left_frame, yellow_goal_mode):
     for i in range(num_contours):
         contour_index = int(sorted_indices[i])
         contour = contours[contour_index]
-        contour_score_poly = evaluate_contour_quality(mask, contour, polygon_N)
-        contour_score_circle = evaluate_contour_circle_quality(mask, contour)
+        contour_score_poly = evaluate_contour_quality(
+            mask,
+            contour,
+            polygon_N,
+            goal_min_area,
+            goal_max_aspect_ratio,
+            goal_polygon_inner_scale,
+        )
+        contour_score_circle = evaluate_contour_circle_quality(
+            mask,
+            contour,
+            goal_min_area,
+            goal_max_aspect_ratio,
+            goal_circle_inner_scale,
+        )
         contour_score = max(contour_score_poly, contour_score_circle)
 
         if(contour_score >= score_threshold):
@@ -156,7 +180,7 @@ def score_polygon_regions(mask, outer_polygon, inner_polygon):
 
     return max(0.0, ring_score - inner_penalty)
 
-def evaluate_contour_quality(mask, contour, N, min_area=500, max_aspect_ratio=1.5):
+def evaluate_contour_quality(mask, contour, N, min_area=500, max_aspect_ratio=1.5, inner_scale=0.6):
     if not has_good_area_and_aspect(contour, min_area, max_aspect_ratio):
         return 0.0
 
@@ -168,7 +192,7 @@ def evaluate_contour_quality(mask, contour, N, min_area=500, max_aspect_ratio=1.
     if centroid is None:
         return 0.0
 
-    inner_polygon = scale_polygon(polygon, centroid, 0.6)
+    inner_polygon = scale_polygon(polygon, centroid, inner_scale)
     score = score_polygon_regions(mask, polygon, inner_polygon)
 
     return score
@@ -198,8 +222,8 @@ def fit_circle_and_score(mask, contour, scale=0.6):
 
     return max(0.0, ring_score - inner_penalty)
 
-def evaluate_contour_circle_quality(mask, contour, min_area=500, max_aspect_ratio=1.5):
+def evaluate_contour_circle_quality(mask, contour, min_area=500, max_aspect_ratio=1.5, inner_scale=0.6):
     if not has_good_area_and_aspect(contour, min_area, max_aspect_ratio):
         return 0.0
 
-    return fit_circle_and_score(mask, contour)
+    return fit_circle_and_score(mask, contour, scale=inner_scale)

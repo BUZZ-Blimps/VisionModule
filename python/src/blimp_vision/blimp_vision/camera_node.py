@@ -12,6 +12,7 @@ import socket
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -26,8 +27,11 @@ from blimp_vision_msgs.msg import PerformanceMetrics
 from ultralytics import YOLO
 
 from blimp_vision.ball_tracker import BallTracker
+from blimp_vision import contour_ball_detection
+from blimp_vision import contour_goal_detection as goal_detection
 from blimp_vision.contour_goal_detection import contour_find_goal
 from blimp_vision.blob_detector import BlobDetectorClass
+from blimp_vision.runtime_config import RuntimeConfig, apply_runtime_config, load_runtime_config_file
 
 # Initialize GStreamer once at startup.
 Gst.init(None)
@@ -66,6 +70,13 @@ class CameraNode(Node):
 
         # Blob detector
         self.blobDetector = BlobDetectorClass()
+        self.runtime_config = self._load_runtime_config()
+        apply_runtime_config(
+            self.runtime_config,
+            self.blobDetector,
+            goal_detection,
+            contour_ball_detection,
+        )
 
         # Other variables.
         self.bridge = CvBridge()
@@ -133,6 +144,32 @@ class CameraNode(Node):
         self.goal_square_height = self.get_parameter('goal_square_height').value
         self.goal_triangle_height = self.get_parameter('goal_triangle_height').value
         self.input_video_path = self.get_parameter('input_video_path').value
+
+    def _load_runtime_config(self):
+        tuning_path = self._resolve_tuning_file()
+        if tuning_path is None:
+            self.get_logger().info('No tuning file found, using built-in detector defaults')
+            return RuntimeConfig()
+
+        try:
+            config = load_runtime_config_file(tuning_path)
+        except Exception as exc:
+            self.get_logger().error(f'Failed to load tuning file {tuning_path}: {exc}')
+            raise
+
+        self.get_logger().info(f'Loaded tuning file: {tuning_path}')
+        return config
+
+    def _resolve_tuning_file(self):
+        tuning_dir = (Path.home() / 'VisionModule').resolve()
+        if not tuning_dir.is_dir():
+            return None
+
+        yaml_files = sorted([*tuning_dir.glob('*.yaml'), *tuning_dir.glob('*.yml')])
+        if len(yaml_files) == 1:
+            return str(yaml_files[0])
+
+        return None
 
 
     def _setup_camera(self):
