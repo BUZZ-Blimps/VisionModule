@@ -249,13 +249,13 @@ class CameraNode(Node):
         """Configure and launch the GStreamer pipeline for streaming."""
         hostname = socket.gethostname()
         match = re.search(r'(\d+)$', hostname)
-        match_suff = int(match.group(1))
-
-        if match_suff == 111:
-            device_num = 5
-        else:
-            device_num = match_suff
-        port = 5000 + device_num
+        # match_suff = int(match.group(1))
+        # if match_suff == 111:
+        #     device_num = 5
+        # else:
+        #     device_num = match_suff
+        # port = 5000 + device_num
+        port = 5005
 
         pipeline_str = (
             "appsrc name=mysource emit-signals=True is-live=True format=GST_FORMAT_TIME "
