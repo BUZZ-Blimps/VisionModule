@@ -1,0 +1,10 @@
+#Don't add actual data filies
+*.jpg
+*.mp4
+*.txt
+videos
+
+#Don't add model data
+runs
+model
+*.cache
