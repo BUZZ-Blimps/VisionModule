@@ -1,0 +1,6 @@
+names:
+  0: Balloon
+  1: P Balloon
+path: .
+train: train.txt
+val: val.txt

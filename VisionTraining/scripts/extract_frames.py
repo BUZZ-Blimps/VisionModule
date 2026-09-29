@@ -2,8 +2,8 @@ import cv2
 from pathlib import Path
 import re
 
-VIDEO = "../videos/right_half67.mp4" #Configure this for video files
-LABEL_DIR = Path("../data/labels/validation/labels/train")
+VIDEO = "../videos/VIDEO_FILE.mp4" #Configure this for video files
+LABEL_DIR = Path("../data/labels/validation")
 IMAGE_DIR = Path("../data/images/validation")
 
 IMAGE_DIR.mkdir(exist_ok=True)

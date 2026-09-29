@@ -6,5 +6,4 @@ videos
 
 #Don't add model data
 runs
-model
 *.cache
