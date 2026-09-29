@@ -99,18 +99,74 @@ half-width videos. Configure `INPUT_PATH`, `OUTPUT_PATH_L`, and
 
 The script's default input is `..\videos\WIN_UTD_Pro.mp4`.
 
-### Extract frames for annotated labels
+### Extract frames
 
-`scripts\extract_frames.py` extracts only the video frames whose label files
-already exist. Configure
-`VIDEO`, `LABEL_DIR`, and `IMAGE_DIR` at the top of that script, then run it
-from the `scripts` directory.
+`scripts\extract_frames.py` provides two extraction functions. Both functions
+accept a `split` parameter with either `train` or `val` and automatically use
+the matching dataset directories:
 
-The default script configuration expects labels under
-`data\labels\validation`.
+| `split` | Images | Labels | Model image list |
+| --- | --- | --- | --- |
+| `train` | `data\images\train` | `data\labels\train` | `model\train.txt` |
+| `val` | `data\images\validation` | `data\labels\validation` | `model\val.txt` |
+
+The functions add newly extracted `.jpg` paths to the matching model list.
+Existing paths are preserved and duplicates are skipped. The paths are stored
+relative to the `VisionTraining` directory, matching the paths expected by
+`model\data.yaml`.
+
+#### Extract frames for annotated labels
+
+`extract_frames_with_txt()` extracts only video frames whose YOLO label files already
+exist. It uses the label filename stem for the output image, so an input label
+such as `frame_000123.txt` produces `frame_000123.jpg`.
 
 Set `FRAME_OFFSET` if the annotation tool's frame numbering does not start at
-the first video frame.
+the first frame of the video. For example:
+
+```python
+from scripts.extract_frames import extract_frames_with_txt
+
+extract_frames_with_txt(
+    video_path="videos/annotated-video.mp4",
+    split="train",
+    frame_offset=0,
+)
+```
+
+#### Extract frames at 60 FPS
+
+`extract_frames_no_txt()` samples a video at 60 FPS and creates an empty
+YOLO label file for every extracted image. Empty labels are useful for frames
+where no objects are present. Each image and label has exactly the same stem,
+for example:
+
+```text
+data/images/train/empty_frame_000001.jpg
+data/labels/train/empty_frame_000001.txt
+```
+
+The corresponding image path is also added to `model/train.txt` or
+`model/val.txt`:
+
+```python
+from scripts.extract_frames import extract_frames_no_txt
+
+extract_frames_no_txt(
+    video_path="videos/empty-frames.mp4",
+    split="train",
+)
+
+# Use split="val" to write to validation and model/val.txt.
+```
+
+The script can also be run directly from the `VisionTraining` directory. Its
+default entry point extracts 60 FPS training frames from the video configured
+by `VIDEO`:
+
+```powershell
+python scripts\extract_frames.py
+```
 
 ## 4. Configure the dataset
 
