@@ -3,9 +3,9 @@ import moviepy.video.fx.all as vfx
 from pathlib import Path
 
 
-INPUT_PATH = "../videos/WIN_20260908_16_22_48_Pro.mp4"
-OUTPUT_PATH_L = "left_half67.mp4"
-OUTPUT_PATH_R = "right_half67.mp4"
+INPUT_PATH = "../videos/WIN_20260929_15_20_05_Pro.mp4"
+OUTPUT_PATH_L = "left_half123.mp4"
+OUTPUT_PATH_R = "right_half123.mp4"
 
 def unused_output_path(output_path):
     path = Path(output_path)
