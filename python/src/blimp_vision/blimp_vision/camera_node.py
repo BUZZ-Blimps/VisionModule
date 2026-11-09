@@ -7,8 +7,6 @@ publishes a 3x3 grid of distance values for the entire frame.
 """
 
 import os
-import re
-import socket
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -44,25 +42,20 @@ class CameraNode(Node):
         self._get_parameters()
 
         # Initialize capture device.
-        if self.input_video_path == "":
-            self.cap = cv2.VideoCapture(self.device_path)
-            if not self.cap.isOpened():
-                self.get_logger().error(f'Failed to open camera at {self.device_path}')
-                return
-        else:
-            self.cap = cv2.VideoCapture(self.input_video_path)
-            if not self.cap.isOpened():
-                self.get_logger().error(f'Failed to open camera at {self.input_video_path}')
-                return
+        source = self.device_path if self.input_video_path == "" else self.input_video_path
+        self.cap = cv2.VideoCapture(source)
+        if not self.cap.isOpened():
+            # Stop here instead of continuing with a half-initialized node
+            raise RuntimeError(f'Failed to open camera at {source}')
 
         self._setup_camera()
         self._load_calibration()
         self._setup_stereorectification()
         self._setup_stereo_matcher()
 
-        # Initialize YOLO models.
-        self.ball_rknn = YOLO(self.ball_model_file, task='detect')
-        self.goal_rknn = YOLO(self.goal_model_file, task='detect')
+        # Initialize YOLO models (optional, HSV detection runs without them).
+        self.ball_rknn = self._load_model(self.ball_model_file)
+        self.goal_rknn = self._load_model(self.goal_model_file)
 
         # Blob detector
         self.blobDetector = BlobDetectorClass()
@@ -116,6 +109,8 @@ class CameraNode(Node):
                 ('goal_square_height', 1.17),
                 ('goal_triangle_height', 1.50),
                 ('input_video_path', ""),
+                ('stream_host', '192.168.0.211'),
+                ('stream_port', 5005),
             ]
         )
 
@@ -133,7 +128,16 @@ class CameraNode(Node):
         self.goal_square_height = self.get_parameter('goal_square_height').value
         self.goal_triangle_height = self.get_parameter('goal_triangle_height').value
         self.input_video_path = self.get_parameter('input_video_path').value
+        self.stream_host = self.get_parameter('stream_host').value
+        self.stream_port = self.get_parameter('stream_port').value
 
+    def _load_model(self, model_file):
+        """Load a YOLO model, or return None (and log it) if it can't be loaded."""
+        try:
+            return YOLO(model_file, task='detect')
+        except Exception as e:
+            self.get_logger().error(f'Failed to load YOLO model {model_file}, continuing without it: {e}')
+            return None
 
     def _setup_camera(self):
         """Configure the camera properties."""
@@ -247,15 +251,9 @@ class CameraNode(Node):
 
     def _setup_gstreamer(self):
         """Configure and launch the GStreamer pipeline for streaming."""
-        hostname = socket.gethostname()
-        match = re.search(r'(\d+)$', hostname)
-        # match_suff = int(match.group(1))
-        # if match_suff == 111:
-        #     device_num = 5
-        # else:
-        #     device_num = match_suff
-        # port = 5000 + device_num
-        port = 5005
+        self.appsrc = None
+        self.stream_timestamp = 0.0
+        self.frame_duration = 1.0 / 12.0
 
         pipeline_str = (
             "appsrc name=mysource emit-signals=True is-live=True format=GST_FORMAT_TIME "
@@ -264,18 +262,20 @@ class CameraNode(Node):
             "mpph264enc name=hwenc ! "
             "h264parse ! rtph264pay config-interval=1 pt=96 ! "
             "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
-            "udpsink host=192.168.0.211 port={port} sync=false"
-        ).format(port=port)
+            "udpsink host={host} port={port} sync=false"
+        ).format(host=self.stream_host, port=self.stream_port)
 
         self.get_logger().info("Launching GStreamer pipeline:\n" + pipeline_str)
-        self.pipeline = Gst.parse_launch(pipeline_str)
+        try:
+            self.pipeline = Gst.parse_launch(pipeline_str)
+        except GLib.Error as e:
+            # Streaming is only for debugging, so keep detecting without it
+            self.get_logger().error(f'Failed to start debug video stream, continuing without it: {e}')
+            return
         self.appsrc = self.pipeline.get_by_name("mysource")
         #caps = Gst.Caps.from_string("video/x-raw,width=640,height=480,framerate=12/1")
         #self.appsrc.set_property("caps", caps)
         self.pipeline.set_state(Gst.State.PLAYING)
-
-        self.stream_timestamp = 0.0
-        self.frame_duration = 1.0 / 12.0
 
     def _setup_videosaver(self):
         if self.save_frames:
@@ -306,9 +306,9 @@ class CameraNode(Node):
 
         self.ball_search_mode = (self.state in [0, 1, 2, 3])
 
-        if old_state is not self.state and self.ball_search_mode:
+        if old_state != self.state and self.ball_search_mode:
             self.get_logger().info('Blimp switched from goal search to ball search, Switching vision model...')
-        elif old_state is not self.state and not self.ball_search_mode:
+        elif old_state != self.state and not self.ball_search_mode:
             self.get_logger().info('Blimp switched from ball search to goal search, Switching vision model...')
 
     def goal_color_callback(self, msg):
@@ -622,7 +622,7 @@ class CameraNode(Node):
                     detection_msg = contour_detection_msg
             
             # Try using YOLO
-            if not detected:
+            if not detected and self.goal_rknn is not None:
                 timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
                 disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
             
@@ -719,17 +719,18 @@ class CameraNode(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Stream the processed frame.
-        processed = cv2.resize(debug_view, (640, 480))
-        data = processed.tobytes()
-        buf = Gst.Buffer.new_allocate(None, len(data), None)
-        buf.fill(0, data)
-        buf.pts = int(self.stream_timestamp * Gst.SECOND)
-        buf.duration = int(self.frame_duration * Gst.SECOND)
-        self.stream_timestamp += self.frame_duration
+        if self.appsrc is not None:
+            processed = cv2.resize(debug_view, (640, 480))
+            data = processed.tobytes()
+            buf = Gst.Buffer.new_allocate(None, len(data), None)
+            buf.fill(0, data)
+            buf.pts = int(self.stream_timestamp * Gst.SECOND)
+            buf.duration = int(self.frame_duration * Gst.SECOND)
+            self.stream_timestamp += self.frame_duration
 
-        flow_return = self.appsrc.emit("push-buffer", buf)
-        if flow_return != Gst.FlowReturn.OK:
-            self.get_logger().error("Error pushing buffer: " + str(flow_return))
+            flow_return = self.appsrc.emit("push-buffer", buf)
+            if flow_return != Gst.FlowReturn.OK:
+                self.get_logger().error("Error pushing buffer: " + str(flow_return))
 
         timing['total'] = (time.time() - t_total) * 1000
 
