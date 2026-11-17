@@ -328,9 +328,9 @@ class CameraNode(Node):
             left_frame,
             persist=True,
             tracker="bytetrack.yaml",
-            verbose=False,
-            conf=0.65,
-            classes=[0]  # Only class 0
+            verbose=True,
+            conf=0.3,
+            classes=[0,1]  # Only class 0
         )[0]
         
         return time.time() - t_start, results
@@ -506,6 +506,7 @@ class CameraNode(Node):
         theta_y = np.arctan(offset_y / self.fy)
         return theta_x, theta_y
 
+    
     def camera_callback(self):
         """Main callback: capture, process, stream frames, and publish metrics and grid distances."""
         timing = {}
@@ -527,172 +528,93 @@ class CameraNode(Node):
         if self.ball_search_mode:
             detected = False
 
-            # Try contour detection
-            contour_detection_msg =  self.blobDetector.contour_find_ball(left_frame)
-            if not detected and contour_detection_msg is not None:
-                timing['preprocessing'] = 0.0
-                timing['disparity'] = 0.0
-                timing['yolo_inference'] = 0.0
+            # Search for balls using YOLO model
+            timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
+            t_yolo, detections = self.run_model_ball(left_frame)
+            detection_msg = self.tracker.select_target(
+                detections,
+                yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
+            )
 
-                theta_x, theta_y = self.get_bbox_theta_offsets(contour_detection_msg.bbox, contour_detection_msg.depth)
+            timing['yolo_inference'] = t_yolo * 1000
+
+            # Process detections.
+            if detection_msg is not None:
+
+                # Turn off disparity and depth for now
+                detection_msg.depth = 0.0
+                theta_x = 0.0
+                theta_y = 0.0
+
                 self.pub_detections.publish(Float64MultiArray(data=[
-                    contour_detection_msg.bbox[0],
-                    contour_detection_msg.bbox[1],
-                    contour_detection_msg.depth,
-                    contour_detection_msg.track_id * 1.0,
+                    detection_msg.bbox[0],
+                    detection_msg.bbox[1],
+                    detection_msg.depth,
+                    detection_msg.track_id * 1.0,
                     (not self.ball_search_mode) * 1.0,
                     theta_x, theta_y,
-                    contour_detection_msg.bbox[2], contour_detection_msg.bbox[3]
+                    detection_msg.bbox[2], detection_msg.bbox[3]
                 ]))
                 detected = True
-                detection_msg = contour_detection_msg
 
-            # if not detected:
-            #     # Search for balls using YOLO model
+            if not detected:
+                # nothing founded
+                timing['preprocessing'] = 0.0
+                timing['yolo_inference'] = 0.0
+                self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
+
+        # dont search for goals
+
+        # else:
+        #     # Search for goals
+        #     detected = False
+            
+        #     # Try using YOLO
+        #     timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
         
-            #     timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
-            #     disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
+        #     #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
+        #     t_yolo, detections = self.run_model_goal(left_frame) 
+
+        #     detection_msg = self.tracker.select_target(
+        #         detections,
+        #         yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
+        #     )
+
+        #     timing['yolo_inference'] = t_yolo * 1000
+
+        #     # Process detections.
+        #     if detection_msg is not None:
+        #         # Goal detection mode: use the calibrated vertical focal length and real goal height.
+        #         # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
+        #         obj_class = detection_msg.obj_class.lower()
+        #         if "circle" in obj_class:
+        #             real_height = self.goal_circle_height
+        #         elif "triangle" in obj_class:
+        #             real_height = self.goal_triangle_height
+        #         elif "square" in obj_class:
+        #             real_height = self.goal_square_height
+        #         raw_goal_height = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+        #         raw_depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+
+        #         # Use the goal_vertical_focal loaded from calibration.
+        #         detection_msg.depth = 0.0
+        #         theta_x = 0.0
+        #         theta_y = 0.0
             
-            #     #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-            #     #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
-            #     t_yolo, detections = self.run_model_ball(left_frame)
+        #         self.pub_detections.publish(Float64MultiArray(data=[
+        #             detection_msg.bbox[0],
+        #             detection_msg.bbox[1],
+        #             detection_msg.depth,
+        #             detection_msg.track_id * 1.0,
+        #             (not self.ball_search_mode) * 1.0,
+        #             theta_x, theta_y,
+        #             detection_msg.bbox[2], detection_msg.bbox[3]
+        #         ]))
 
-            #     detection_msg = self.tracker.select_target(
-            #         detections,
-            #         yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
-            #     )
-
-            #     t_disp, disparity = disp_future.result()
-
-            #     timing['disparity'] = t_disp * 1000
-            #     timing['yolo_inference'] = t_yolo * 1000
-
-            #     # Process detections.
-            #     if detection_msg is not None:
-            #         disp_depth = self.filter_disparity(disparity, detection_msg.bbox)
-            #         regr_depth = self.mono_depth_estimator(detection_msg.bbox[2], detection_msg.bbox[3])
-            #         detection_msg.depth = np.min([disp_depth, regr_depth]) if (np.square(np.max([detection_msg.bbox[2], detection_msg.bbox[3]])) > 900.0) else 100.0
-
-            #         theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
-
-            #         self.pub_detections.publish(Float64MultiArray(data=[
-            #             detection_msg.bbox[0],
-            #             detection_msg.bbox[1],
-            #             detection_msg.depth,
-            #             detection_msg.track_id * 1.0,
-            #             (not self.ball_search_mode) * 1.0,
-            #             theta_x, theta_y,
-            #             detection_msg.bbox[2], detection_msg.bbox[3]
-            #         ]))
-            #         detection = True
-
-            if not detected:
-                #nothing founded
-                timing['preprocessing'] = 0.0
-                timing['disparity'] = 0.0
-                timing['yolo_inference'] = 0.0
-                self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
-
-        else:
-            # Search for goals
-            detected = False
-
-            # Try using contour detection
-            contour_detection_msg = contour_find_goal(left_frame, self.yellow_goal_mode)
-            if not detected and contour_detection_msg is not None:
-                timing['preprocessing'] = 0.0
-                timing['disparity'] = 0.0
-                timing['yolo_inference'] = 0.0
-                bbox_area = contour_detection_msg.bbox[2]*contour_detection_msg.bbox[3]
-                if bbox_area >= 8000: # pixel area to start trusting contours over YOLO
-                    # Trust contour detection
-                    if self.tracker.current_tracked_id is not None:
-                        contour_detection_msg.track_id = self.tracker.current_tracked_id
-                    theta_x, theta_y = self.get_bbox_theta_offsets(contour_detection_msg.bbox, contour_detection_msg.depth)
-                    self.pub_detections.publish(Float64MultiArray(data=[
-                        contour_detection_msg.bbox[0],
-                        contour_detection_msg.bbox[1],
-                        contour_detection_msg.depth,
-                        contour_detection_msg.track_id * 1.0,
-                        (not self.ball_search_mode) * 1.0,
-                        theta_x, theta_y,
-                        contour_detection_msg.bbox[2], contour_detection_msg.bbox[3]
-                    ]))
-                    detected = True
-                    detection_msg = contour_detection_msg
+        #         detected = True
             
-            # Try using YOLO
-            if not detected:
-                timing['preprocessing'] = (time.time() - t_preprocess_start) * 1000
-                disp_future = self.thread_pool.submit(self.compute_disparity, left_frame, right_frame)
-            
-                #yolo_future = self.thread_pool.submit(self.run_model, left_frame)
-                #t_disp, disparity = self.compute_disparity(left_frame, right_frame)
-                t_yolo, detections = self.run_model_goal(left_frame) 
-
-                detection_msg = self.tracker.select_target(
-                    detections,
-                    yellow_goal_mode=None if self.ball_search_mode else self.yellow_goal_mode
-                )
-
-                t_disp, disparity = disp_future.result()
-
-                timing['disparity'] = t_disp * 1000
-                timing['yolo_inference'] = t_yolo * 1000
-
-                # Process detections.
-                if detection_msg is not None:
-                    # Goal detection mode: use the calibrated vertical focal length and real goal height.
-                    # Assume detection_msg.obj_class contains a string like "circle", "square", or "triangle"
-                    obj_class = detection_msg.obj_class.lower()
-                    if "circle" in obj_class:
-                        real_height = self.goal_circle_height
-                    elif "triangle" in obj_class:
-                        real_height = self.goal_triangle_height
-                    elif "square" in obj_class:
-                        real_height = self.goal_square_height
-                    raw_goal_height = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
-                    raw_depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
-                    # Use the goal_vertical_focal loaded from calibration.
-                    detection_msg.depth = 0.31804 * np.exp(0.59 * raw_depth) + 1.424
-                    
-                    theta_x, theta_y = self.get_bbox_theta_offsets(detection_msg.bbox, detection_msg.depth)
-
-                    self.pub_detections.publish(Float64MultiArray(data=[
-                        detection_msg.bbox[0],
-                        detection_msg.bbox[1],
-                        detection_msg.depth,
-                        detection_msg.track_id * 1.0,
-                        (not self.ball_search_mode) * 1.0,
-                        theta_x, theta_y,
-                        detection_msg.bbox[2], detection_msg.bbox[3]
-                    ]))
-
-                    detected = True
-            
-            # Go back to coutour
-            if not detected and contour_detection_msg is not None:
-                timing['preprocessing'] = 0.0
-                timing['disparity'] = 0.0
-                timing['yolo_inference'] = 0.0
-                # Trust contour detection
-                if self.tracker.current_tracked_id is not None:
-                    contour_detection_msg.track_id = self.tracker.current_tracked_id
-                theta_x, theta_y = self.get_bbox_theta_offsets(contour_detection_msg.bbox, contour_detection_msg.depth)
-                self.pub_detections.publish(Float64MultiArray(data=[
-                    contour_detection_msg.bbox[0],
-                    contour_detection_msg.bbox[1],
-                    contour_detection_msg.depth,
-                    contour_detection_msg.track_id * 1.0,
-                    (not self.ball_search_mode) * 1.0,
-                    theta_x, theta_y,
-                    contour_detection_msg.bbox[2], contour_detection_msg.bbox[3]
-                ]))
-                detected = True
-                detection_msg = contour_detection_msg
-            
-            if not detected:
-                self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
+        #     if not detected:
+        #         self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
 
         # Prepare debug view.
         debug_view = left_frame.copy()
@@ -735,8 +657,7 @@ class CameraNode(Node):
 
         # Publish performance metrics.
         perf_msg = PerformanceMetrics()
-        perf_msg.yolo_time = timing['yolo_inference']
-        perf_msg.disparity_time = timing['disparity']
+        # perf_msg.yolo_time = timing['yolo_inference']
         perf_msg.total_time = timing['total']
         perf_msg.fps = (1 / perf_msg.total_time) * 1000
         self.pub_performance.publish(perf_msg)

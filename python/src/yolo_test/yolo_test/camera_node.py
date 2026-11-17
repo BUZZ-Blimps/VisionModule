@@ -307,6 +307,8 @@ class CameraNode(Node):
                 timing['yolo_inference'] = 0.0
                 self.pub_detections.publish(Float64MultiArray(data=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]))
 
+        # dont search for goals
+
         # else:
         #     # Search for goals
         #     detected = False
@@ -336,7 +338,7 @@ class CameraNode(Node):
         #         elif "square" in obj_class:
         #             real_height = self.goal_square_height
         #         raw_goal_height = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
-        #         # raw_depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
+        #         raw_depth = (self.goal_vertical_focal * real_height) / detection_msg.bbox[3]
 
         #         # Use the goal_vertical_focal loaded from calibration.
         #         detection_msg.depth = 0.0
